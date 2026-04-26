@@ -39,6 +39,20 @@ cp .env.sample .env
 PYTHONPATH=tganalytics:. python3 -m pytest tests/ -q
 ```
 
+## Developer Setup Shortcut
+
+For local development, you can bootstrap everything (env sync, dependencies, and required data directories) with one command:
+
+```bash
+make dev-setup
+```
+
+Before opening a PR, run the standard repository checks:
+
+```bash
+make dev-check
+```
+
 ## Session Bootstrap (Auth)
 
 `read` profile remains write-safe, but initial Telegram login requires auth requests.
