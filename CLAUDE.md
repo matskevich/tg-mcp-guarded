@@ -62,21 +62,95 @@ Read/Actions MCP tools для доступа к Telegram API:
 
 ## Использование из другого проекта
 
-Добавь в `.mcp.json` или `.claude/settings.json`:
+Предпочтительно подключать split-профили, а не legacy alias `telegram`/`tganalytics`.
+
+Добавь в `.mcp.json`:
 ```json
 {
   "mcpServers": {
-    "tganalytics": {
-      "command": "/Users/dmitrymatskevich/tg-mcp/venv/bin/python3",
-      "args": ["/Users/dmitrymatskevich/tg-mcp/tganalytics/mcp_server.py"],
+    "tgmcp-read": {
+      "command": "/absolute/path/to/tg-mcp/venv/bin/python3",
+      "args": [
+        "/absolute/path/to/tg-mcp/tganalytics/mcp_server_read.py"
+      ],
       "env": {
-        "PYTHONPATH": "/Users/dmitrymatskevich/tg-mcp/tganalytics:/Users/dmitrymatskevich/tg-mcp",
-        "TG_SESSIONS_DIR": "/Users/dmitrymatskevich/tg-mcp/data/sessions"
+        "PYTHONPATH": "/absolute/path/to/tg-mcp/tganalytics:/absolute/path/to/tg-mcp",
+        "TG_SESSIONS_DIR": "/absolute/path/to/tg-mcp/data/sessions",
+        "TG_SESSION_PATH": "/absolute/path/to/tg-mcp/data/sessions/my_account_ro.session",
+        "TG_ALLOW_SESSION_SWITCH": "0",
+        "TG_BLOCK_DIRECT_TELETHON_WRITE": "1",
+        "TG_ALLOW_DIRECT_TELETHON_WRITE": "0",
+        "TG_ENFORCE_ACTION_PROCESS": "1",
+        "TG_DIRECT_TELETHON_WRITE_ALLOWED_CONTEXTS": "actions_mcp",
+        "TG_WRITE_CONTEXT": "read_mcp",
+        "TG_ACTION_PROCESS": "0",
+        "TG_RECEIVE_UPDATES": "0",
+        "TG_SESSION_LOCK_MODE": "shared",
+        "TG_GLOBAL_RPS_MODE": "shared",
+        "TG_FLOOD_CIRCUIT_THRESHOLD_SEC": "300",
+        "TG_FLOOD_CIRCUIT_COOLDOWN_SEC": "900",
+        "TG_EXPECTED_USERNAME": "my_account"
+      }
+    },
+    "tgmcp-actions": {
+      "command": "/absolute/path/to/tg-mcp/venv/bin/python3",
+      "args": [
+        "/absolute/path/to/tg-mcp/tganalytics/mcp_server_actions.py"
+      ],
+      "env": {
+        "PYTHONPATH": "/absolute/path/to/tg-mcp/tganalytics:/absolute/path/to/tg-mcp",
+        "TG_SESSIONS_DIR": "/absolute/path/to/tg-mcp/data/sessions",
+        "TG_SESSION_PATH": "/absolute/path/to/tg-mcp/data/sessions/my_account.session",
+        "TG_ALLOW_SESSION_SWITCH": "0",
+        "TG_ACTIONS_ENABLED": "1",
+        "TG_ACTIONS_REQUIRE_ALLOWLIST": "1",
+        "TG_ACTIONS_ALLOWED_GROUPS": "@your_allowed_target",
+        "TG_ACTIONS_MAX_MESSAGE_LEN": "2000",
+        "TG_ACTIONS_MAX_FILE_MB": "20",
+        "TG_ACTIONS_REQUIRE_CONFIRMATION_TEXT": "1",
+        "TG_ACTIONS_CONFIRMATION_PHRASE": "отправляй",
+        "TG_ACTIONS_MIN_CONFIRM_TEXT_LEN": "6",
+        "TG_ACTIONS_REQUIRE_APPROVAL_CODE": "1",
+        "TG_ACTIONS_APPROVAL_TTL_SEC": "1800",
+        "TG_ACTIONS_APPROVAL_MIN_AGE_SEC": "30",
+        "TG_ACTIONS_APPROVAL_FILE": "/absolute/path/to/tg-mcp/data/anti_spam/action_approvals.json",
+        "TG_ACTIONS_IDEMPOTENCY_ENABLED": "1",
+        "TG_ACTIONS_IDEMPOTENCY_WINDOW_SEC": "86400",
+        "TG_ACTIONS_IDEMPOTENCY_FILE": "/absolute/path/to/tg-mcp/data/anti_spam/action_idempotency.json",
+        "TG_ACTIONS_BATCH_FILE": "/absolute/path/to/tg-mcp/data/anti_spam/action_batches.json",
+        "TG_ACTIONS_BATCH_TTL_HOURS": "168",
+        "TG_ACTIONS_BATCH_APPROVAL_LEASE_SEC": "86400",
+        "TG_ACTIONS_BATCH_RUN_LEASE_SEC": "1800",
+        "TG_ACTIONS_UNSAFE_OVERRIDE": "0",
+        "TG_BLOCK_DIRECT_TELETHON_WRITE": "1",
+        "TG_ALLOW_DIRECT_TELETHON_WRITE": "0",
+        "TG_ENFORCE_ACTION_PROCESS": "1",
+        "TG_DIRECT_TELETHON_WRITE_ALLOWED_CONTEXTS": "actions_mcp",
+        "TG_WRITE_CONTEXT": "actions_mcp",
+        "TG_ACTION_PROCESS": "1",
+        "TG_RECEIVE_UPDATES": "0",
+        "TG_SESSION_LOCK_MODE": "shared",
+        "TG_GLOBAL_RPS_MODE": "shared",
+        "TG_FLOOD_CIRCUIT_THRESHOLD_SEC": "300",
+        "TG_FLOOD_CIRCUIT_COOLDOWN_SEC": "900",
+        "MAX_GROUP_MSGS_PER_DAY": "30",
+        "TG_EXPECTED_USERNAME": "my_account"
       }
     }
   }
 }
 ```
+
+Если используешь claude-code, в `~/.claude/settings.local.json` или project `.claude/settings.local.json` включай именно:
+```json
+{
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": ["tgmcp-read", "tgmcp-actions"],
+  "disabledMcpjsonServers": ["telegram"]
+}
+```
+
+Иначе claude может подключить legacy alias `telegram` и увидеть только read-capability.
 
 ## Команды
 

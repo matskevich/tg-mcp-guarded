@@ -39,6 +39,20 @@ cp .env.sample .env
 PYTHONPATH=tganalytics:. python3 -m pytest tests/ -q
 ```
 
+## Developer Setup Shortcut
+
+For local development, you can bootstrap everything (env sync, dependencies, and required data directories) with one command:
+
+```bash
+make dev-setup
+```
+
+Before opening a PR, run the standard repository checks:
+
+```bash
+make dev-check
+```
+
 ## Session Bootstrap (Auth)
 
 `read` profile remains write-safe, but initial Telegram login requires auth requests.
@@ -286,12 +300,13 @@ Add to your project's `.mcp.json`:
 |------|-------------|
 | `tg_list_sessions` | List available Telegram sessions |
 | `tg_use_session` | Switch active session |
-| `tg_get_group_info` | Get group/channel info |
+| `tg_get_group_info` | Get group/channel/direct dialog info |
 | `tg_get_participants` | Export group members |
 | `tg_search_participants` | Search members by query |
-| `tg_get_messages` | Export messages |
-| `tg_get_message_count` | Get message count |
-| `tg_get_group_creation_date` | Get group creation date |
+| `tg_get_messages` | Export messages from a dialog target |
+| `tg_get_messages_since` | Export messages newest-to-oldest until a cutoff date |
+| `tg_get_message_count` | Get dialog message count |
+| `tg_get_group_creation_date` | Get dialog first-message date |
 | `tg_get_my_dialogs` | List account dialogs |
 | `tg_resolve_username` | Resolve username to entity |
 | `tg_get_user_by_id` | Get user by numeric ID |
@@ -310,14 +325,23 @@ Add to your project's `.mcp.json`:
 | `tg_resolve_username` | Resolve target username |
 | `tg_send_message` | Send message with anti-spam + policy gates (`confirm=true` + exact `confirmation_text` + one-time `approval_code`) |
 | `tg_send_file` | Send local file with anti-spam + policy gates (`confirm=true` + exact `confirmation_text` + one-time `approval_code`) |
+| `tg_delete_messages` | Delete specific messages in a dialog/group (`dry_run` by default; same confirm + approval gates on execution) |
+| `tg_clear_history` | Clear dialog history with `DeleteHistoryRequest` (`dry_run` by default; same confirm + approval gates on execution) |
+| `tg_leave_dialog` | Leave an allowlisted channel/group (`dry_run` by default; same confirm + approval gates on execution) |
+| `tg_edit_message` | Edit a message in a dialog/group (`dry_run` by default; same confirm + approval gates on execution) |
+| `tg_forward_messages` | Forward messages between allowlisted dialogs (`dry_run` by default; same confirm + approval gates on execution) |
 | `tg_add_member_to_group` | Add user to group/channel (`dry_run` by default; same confirm + approval gates on execution) |
 | `tg_remove_member_from_group` | Remove user from group/channel (`dry_run` by default; same confirm + approval gates on execution) |
 | `tg_migrate_member` | Add new user + remove old user in one safe flow (same confirm + approval gates on execution) |
 | `tg_create_add_member_batch` | Build one add-member batch for many groups (single approval for whole task) |
 | `tg_create_add_member_batch_from_report` | Build batch from failed groups in JSON report |
+| `tg_create_delete_messages_batch_from_manifest` | Build delete batch from a reviewed privacy scrubber manifest |
+| `tg_create_leave_dialog_batch_from_candidates` | Build leave batch from reviewed channel candidates |
 | `tg_approve_batch` | One-time approve a batch |
 | `tg_get_batch_status` | Check batch progress and pending groups |
 | `tg_run_add_member_batch` | Run approved batch in chunks (no per-group approvals) |
+| `tg_run_delete_messages_batch` | Run approved delete batch in chunks |
+| `tg_run_leave_dialog_batch` | Run approved leave-dialog batch in chunks |
 | `tg_get_actions_policy` | Show active action restrictions |
 | `tg_get_stats` | Anti-spam system stats |
 | `tg_auth_status` | Check current session authorization status |
@@ -335,6 +359,7 @@ Add to your project's `.mcp.json`:
 - Set `TG_READ_SESSION_PATH` + `TG_ACTIONS_SESSION_PATH` in both server envs so runtime can warn/fail on same-session misconfig.
 - `TG_SESSION_PATH_CONFLICT_MODE=warn` prints startup/runtime warning; set `fail` to block server start on same-session conflict.
 - Run `python3 scripts/check_session_paths.py --config /path/to/.mcp.json` before enabling both servers.
+- If a Codex thread did not expose native `mcp__tgmcp_actions__*` tools, use `python3 scripts/tg_action_bridge.py ...` as a shell fallback. The bridge still talks to `mcp_server_actions.py` over MCP/JSON-RPC, defaults to `TG_SESSION_RUNTIME_MODE=copy`, and preserves the same allowlist/approval/confirm policy.
 - `TG_EXPECTED_USERNAME` enables fail-fast on session/account mismatch (`@expected` vs actual account in session).
 - `TG_RECEIVE_UPDATES=0` (default) disables Telethon updates loop to reduce sqlite session lock contention.
 - `TG_GLOBAL_RPS_MODE=shared` applies one shared RPS budget across all processes using the same `data/anti_spam`.
@@ -353,6 +378,20 @@ Add to your project's `.mcp.json`:
 - Use `tgmcp-actions` tools for any write operation.
 - In strict mode (`TG_ENFORCE_ACTION_PROCESS=1`), write is allowed only when process entrypoint is `mcp_server_actions.py`.
 - For hard session isolation, run MCP under a dedicated OS user and keep `data/sessions` owned by that user only.
+
+Fallback bridge examples:
+
+```bash
+# list tools from ~/.codex/config.toml server tgmcp_actions
+python3 scripts/tg_action_bridge.py tools
+
+# raw call
+python3 scripts/tg_action_bridge.py call tg_get_actions_policy --args-json '{}'
+
+# canonical write flow: dry_run -> approval_code -> confirm
+python3 scripts/tg_action_bridge.py write-call tg_send_message \
+  --args-json '{"group":"@mybot","message_text":"hello"}'
+```
 
 ## Structure
 

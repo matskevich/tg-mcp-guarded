@@ -130,3 +130,154 @@ def create_add_member_batch_record(
         "last_error": None,
     }
     return batch, blocked_targets
+
+
+def _unique_targets(raw_targets: list[str]) -> list[str]:
+    unique: list[str] = []
+    seen = set()
+    for target in raw_targets:
+        value = str(target).strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        unique.append(value)
+    return unique
+
+
+def create_leave_dialog_batch_record(
+    *,
+    targets: list[str],
+    note: str,
+    ttl_hours: int,
+    check_target_allowed: Callable[[str], tuple[bool, str | None]],
+) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    """Create canonical batch record for leaving many dialogs."""
+    blocked_targets: list[dict[str, str]] = []
+    actions: list[dict[str, Any]] = []
+    for target in _unique_targets(targets):
+        allowed, error = check_target_allowed(target)
+        action_hash = hash_payload(
+            {
+                "action": "leave_dialog",
+                "target": normalize_target(target),
+            }
+        )
+        status = "pending" if allowed else "blocked_policy"
+        if not allowed:
+            blocked_targets.append({"group": target, "error": error or "blocked"})
+        actions.append(
+            {
+                "group": target,
+                "action_hash": action_hash,
+                "status": status,
+                "attempts": 0,
+                "last_error": None if allowed else error,
+                "last_run_ts": None,
+            }
+        )
+
+    now = int(time.time())
+    hours = max(1, int(ttl_hours))
+    batch_id = f"batch_{secrets.token_urlsafe(7)}"
+    batch = {
+        "id": batch_id,
+        "type": "leave_dialog",
+        "status": "pending_approval",
+        "approved": False,
+        "approved_until_ts": None,
+        "run_lock_owner": None,
+        "run_lock_until_ts": None,
+        "note": (note or "").strip(),
+        "created_at_ts": now,
+        "approved_at_ts": None,
+        "expires_at_ts": now + (hours * 3600),
+        "actions": actions,
+        "last_run_ts": None,
+        "last_error": None,
+    }
+    return batch, blocked_targets
+
+
+def create_delete_messages_batch_record(
+    *,
+    targets: list[dict[str, Any]],
+    note: str,
+    ttl_hours: int,
+    max_ids_per_action: int,
+    revoke: bool,
+    check_target_allowed: Callable[[str], tuple[bool, str | None]],
+) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    """Create canonical batch record for deleting message ids in many dialogs."""
+    blocked_targets: list[dict[str, str]] = []
+    actions: list[dict[str, Any]] = []
+    chunk_size = max(1, int(max_ids_per_action or 100))
+
+    for target_record in targets:
+        group = str(
+            target_record.get("group") or target_record.get("chat_id") or ""
+        ).strip()
+        if not group:
+            continue
+        raw_ids = target_record.get("message_ids") or []
+        message_ids: list[int] = []
+        seen_ids = set()
+        for raw_id in raw_ids:
+            try:
+                message_id = int(raw_id)
+            except Exception:
+                continue
+            if message_id <= 0 or message_id in seen_ids:
+                continue
+            seen_ids.add(message_id)
+            message_ids.append(message_id)
+        if not message_ids:
+            continue
+
+        allowed, error = check_target_allowed(group)
+        if not allowed:
+            blocked_targets.append({"group": group, "error": error or "blocked"})
+
+        for idx in range(0, len(message_ids), chunk_size):
+            chunk = message_ids[idx : idx + chunk_size]
+            action_hash = hash_payload(
+                {
+                    "action": "delete_messages",
+                    "target": normalize_target(group),
+                    "message_ids": chunk,
+                    "revoke": bool(revoke),
+                }
+            )
+            actions.append(
+                {
+                    "group": group,
+                    "message_ids": chunk,
+                    "message_count": len(chunk),
+                    "action_hash": action_hash,
+                    "status": "pending" if allowed else "blocked_policy",
+                    "attempts": 0,
+                    "last_error": None if allowed else error,
+                    "last_run_ts": None,
+                }
+            )
+
+    now = int(time.time())
+    hours = max(1, int(ttl_hours))
+    batch_id = f"batch_{secrets.token_urlsafe(7)}"
+    batch = {
+        "id": batch_id,
+        "type": "delete_messages",
+        "status": "pending_approval",
+        "approved": False,
+        "approved_until_ts": None,
+        "run_lock_owner": None,
+        "run_lock_until_ts": None,
+        "note": (note or "").strip(),
+        "created_at_ts": now,
+        "approved_at_ts": None,
+        "expires_at_ts": now + (hours * 3600),
+        "revoke": bool(revoke),
+        "actions": actions,
+        "last_run_ts": None,
+        "last_error": None,
+    }
+    return batch, blocked_targets

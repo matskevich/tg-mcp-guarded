@@ -4,8 +4,8 @@ This guide is for AI agents and operators who need to work with `tg-mcp` quickly
 
 ## 1. Mental Model
 
-- `tgmcp-read`: analytics and discovery only (`tg_get_*`, `tg_list_sessions`, `tg_resolve_username`, etc.).
-- `tgmcp-actions`: any Telegram write (`tg_send_message`, `tg_send_file`, add/remove/migrate member).
+- `tgmcp-read`: analytics and discovery only (`tg_get_*`, `tg_get_messages_since`, `tg_list_sessions`, `tg_resolve_username`, etc.).
+- `tgmcp-actions`: any Telegram write (`tg_send_message`, `tg_send_file`, `tg_delete_messages`, `tg_clear_history`, `tg_leave_dialog`, `tg_edit_message`, `tg_forward_messages`, add/remove/migrate member).
 - Direct Telethon write is blocked by default outside Action MCP.
 - Session bootstrap auth is allowed only in explicit mode (`TG_AUTH_BOOTSTRAP=1`).
 - For new installations, prefer `read` profile first (`scripts/render_mcp_config.py --profile read`).
@@ -40,14 +40,22 @@ If any check fails, stop write execution and report policy mismatch.
 5. If duplicate blocked:
 - wait for window or use `force_resend=true` only if user explicitly asked to resend.
 
+Fallback when native ActionMCP tools are missing in the current thread:
+- use `python3 scripts/tg_action_bridge.py tools` to verify shell-side bridge access
+- use `python3 scripts/tg_action_bridge.py write-call ...` for write tools
+- the bridge still talks to `mcp_server_actions.py` over MCP/JSON-RPC and keeps allowlist/approval/confirm gates
+
 ## 4. Canonical Write Flow (Batch Mission)
 
-Use this when user wants one approval and then autonomous processing of many groups.
+Use this when user wants one approval and then autonomous processing of many groups or destructive cleanup chunks.
 
-1. `tg_create_add_member_batch(user, groups, note)`
+1. Create one batch:
+- add member: `tg_create_add_member_batch(user, groups, note)`
+- delete cleanup: `tg_create_delete_messages_batch_from_manifest(manifest_path)`
+- leave cleanup: `tg_create_leave_dialog_batch_from_candidates(candidates_path)`
 2. `tg_approve_batch(batch_id, confirmation_text)` once
 3. Loop:
-- `tg_run_add_member_batch(batch_id, max_actions=...)`
+- `tg_run_add_member_batch(batch_id, max_actions=...)`, `tg_run_delete_messages_batch(...)`, or `tg_run_leave_dialog_batch(...)`
 - `tg_get_batch_status(batch_id)` for progress
 4. If stopped by quota:
 - wait for quota reset, continue with `tg_run_add_member_batch`

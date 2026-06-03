@@ -17,11 +17,11 @@ os.environ.setdefault("TG_WRITE_CONTEXT", "read_mcp")
 os.environ.setdefault("TG_ACTION_PROCESS", "0")
 os.environ.setdefault("TG_SESSION_RUNTIME_MODE", "copy")
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP  # noqa: E402
+from mcp_server_common import MCPServerContext  # noqa: E402
 
-from mcp_server_common import MCPServerContext
-from tganalytics.infra.limiter import get_rate_limiter, safe_call
-from tganalytics.infra.metrics import snapshot
+from tganalytics.infra.limiter import get_rate_limiter, safe_call  # noqa: E402
+from tganalytics.infra.metrics import snapshot  # noqa: E402
 
 SERVER_NAME = os.environ.get("TG_MCP_SERVER_NAME", "tganalytics-read")
 ALLOW_SESSION_SWITCH = os.environ.get("TG_ALLOW_SESSION_SWITCH", "1") == "1"
@@ -44,7 +44,7 @@ async def tg_use_session(session_name: str) -> dict:
 
 @mcp.tool()
 async def tg_get_group_info(group: str) -> dict:
-    """Get info about a Telegram group/channel (id, title, participants_count, type)."""
+    """Get info about a Telegram dialog target (group/channel/direct chat)."""
     manager = await ctx.get_manager()
     result = await manager.get_group_info(group)
     return result or {"error": "Group not found"}
@@ -68,15 +68,25 @@ async def tg_search_participants(group: str, query: str, limit: int = 50) -> dic
 
 @mcp.tool()
 async def tg_get_messages(group: str, limit: int = 100, min_id: int = 0) -> dict:
-    """Get messages from a Telegram group (id, date, text, from_id, views, ...)."""
+    """Get messages from a Telegram dialog target (group/channel/direct chat)."""
     manager = await ctx.get_manager()
     messages = await manager.get_messages(group, limit=limit, min_id=min_id)
     return {"count": len(messages), "messages": messages}
 
 
 @mcp.tool()
+async def tg_get_messages_since(group: str, cutoff_iso: str, limit: int = 0) -> dict:
+    """Get messages from newest to oldest until cutoff_iso (YYYY-MM-DD or ISO datetime)."""
+    manager = await ctx.get_manager()
+    messages = await manager.get_messages_since(
+        group, cutoff_iso=cutoff_iso, limit=limit
+    )
+    return {"count": len(messages), "messages": messages, "cutoff_iso": cutoff_iso}
+
+
+@mcp.tool()
 async def tg_get_message_count(group: str) -> dict:
-    """Get total number of messages in a Telegram group."""
+    """Get total number of messages in a Telegram dialog target."""
     manager = await ctx.get_manager()
     count = await manager.get_message_count(group)
     if count is not None:
@@ -86,7 +96,7 @@ async def tg_get_message_count(group: str) -> dict:
 
 @mcp.tool()
 async def tg_get_group_creation_date(group: str) -> dict:
-    """Get approximate creation date of a Telegram group (via first message)."""
+    """Get approximate creation date of a Telegram dialog target (via first message)."""
     manager = await ctx.get_manager()
     dt = await manager.get_group_creation_date(group)
     if dt is not None:
@@ -130,7 +140,9 @@ async def tg_get_user_by_id(user_id: int) -> dict:
 
 
 @mcp.tool()
-async def tg_download_media(group: str, message_id: int, output_dir: str = "data/downloads") -> dict:
+async def tg_download_media(
+    group: str, message_id: int, output_dir: str = "data/downloads"
+) -> dict:
     """Download a file/media from a Telegram message to a local directory."""
     manager = await ctx.get_manager()
     path = await manager.download_media(group, message_id, output_dir)

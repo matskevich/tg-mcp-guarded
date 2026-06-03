@@ -14,6 +14,15 @@ data/sessions/
 data/export/
 data/logs/
 data/anti_spam/
+data/downloads/
+data/*.html
+data/*.png
+tganalytics/data/
+
+# Local one-off analysis scripts
+scripts/analyze_chat.py
+scripts/visualize_chat.py
+scripts/visualize_chat_interactive.py
 
 # Python cache
 __pycache__/
