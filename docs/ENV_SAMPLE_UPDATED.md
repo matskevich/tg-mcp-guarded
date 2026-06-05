@@ -6,7 +6,7 @@
 # Telegram API ключи
 TG_API_ID=
 TG_API_HASH=
-SESSION_NAME=s16_session
+SESSION_NAME=example_session
 
 # Anti-spam настройки
 RATE_RPS=4                    # Запросов в секунду

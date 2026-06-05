@@ -6,10 +6,10 @@ This is an interactive helper: it may prompt for phone number, login code, and 2
 
 Usage:
   # uses .env TG_API_ID / TG_API_HASH
-  PYTHONPATH=. python3 examples/create_telegram_session.py --session-name dmatskevich
+  PYTHONPATH=. python3 examples/create_telegram_session.py --session-name example_account
 
   # custom session dir (default: data/sessions)
-  PYTHONPATH=. python3 examples/create_telegram_session.py --session-name dmatskevich --session-dir data/sessions
+  PYTHONPATH=. python3 examples/create_telegram_session.py --session-name example_account --session-dir data/sessions
 """
 
 import argparse

@@ -437,7 +437,7 @@ def main(argv: list[str] | None = None) -> int:
                 confirmation_text = (
                     args.confirmation_text
                     or str(
-                        env.get("TG_ACTIONS_CONFIRMATION_PHRASE", "отправляй")
+                        env.get("TG_ACTIONS_CONFIRMATION_PHRASE", "")
                     ).strip()
                 )
                 if not confirmation_text:

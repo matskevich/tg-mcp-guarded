@@ -70,10 +70,10 @@ def update_in_space_flags(members: List[Dict[str, Any]], space_ids: Set[int], sp
             in_space = True
         elif username and username in space_usernames:
             in_space = True
-        prev = m.get("in_s16_space")
+        prev = m.get("in_example_group")
         if prev is not None and bool(prev) == in_space:
             continue
-        m["in_s16_space"] = in_space
+        m["in_example_group"] = in_space
         updated += 1
     return updated
 
@@ -109,7 +109,7 @@ def find_members_by_usernames(members: List[Dict[str, Any]], usernames: List[str
 def pick_next_top10(members: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     candidates: List[Dict[str, Any]] = []
     for m in members:
-        if m.get("in_s16_space"):
+        if m.get("in_example_group"):
             continue
         if is_stale_active(m):
             continue
@@ -141,7 +141,7 @@ def backup_file(path: Path) -> Path:
 def parse_args() -> Config:
     parser = argparse.ArgumentParser(description="Update members.json: cross-check Space, mark Stale for provided and next top-10.")
     parser.add_argument("--members", required=True, type=Path, help="Path to aggregated offline events members.json")
-    parser.add_argument("--space", required=True, type=Path, help="Path to s16_space_all_participants.json")
+    parser.add_argument("--space", required=True, type=Path, help="Path to example_group_all_participants.json")
     parser.add_argument("--stale-usernames", default="", help="Comma-separated usernames to mark stale now")
     parser.add_argument("--stale-days", type=int, default=180, help="Days to keep stale active (default 180)")
     parser.add_argument("--write-inplace", action="store_true", help="Write changes in place (creates .bak)")
@@ -207,7 +207,7 @@ def main() -> None:
 
     # Summary
     print("\nSummary:")
-    print(f"in_s16_space updated: {changed_in_space}")
+    print(f"in_example_group updated: {changed_in_space}")
     print(f"Provided usernames requested: {len(cfg.stale_usernames)}")
     print(f"Provided usernames found: {len(provided_found)}")
     if provided_missing:

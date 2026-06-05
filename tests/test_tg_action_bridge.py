@@ -100,7 +100,7 @@ def _write_config(tmp_path: Path, server_path: Path) -> Path:
                 f'args = ["{server_path}"]',
                 "",
                 "[mcp_servers.tgmcp_actions.env]",
-                'TG_ACTIONS_CONFIRMATION_PHRASE = "отправляй"',
+                'TG_ACTIONS_CONFIRMATION_PHRASE = "confirm-test-action"',
                 'TG_ACTIONS_APPROVAL_MIN_AGE_SEC = "0"',
                 "",
             ]
@@ -166,6 +166,6 @@ def test_bridge_write_call_runs_preview_then_confirm(tmp_path):
     assert payload["preview"]["approval_code"] == "abc123"
     assert payload["execution"]["confirm"] is True
     assert payload["execution"]["approval_code"] == "abc123"
-    assert payload["execution"]["confirmation_text"] == "отправляй"
+    assert payload["execution"]["confirmation_text"] == "confirm-test-action"
     assert payload["execution"]["dry_run"] is False
     assert payload["execution"]["message_text"] == "hello"

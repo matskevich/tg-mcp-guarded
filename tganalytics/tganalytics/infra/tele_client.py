@@ -210,7 +210,7 @@ try:
 except ValueError:
     api_id = 0
 
-session_name = os.getenv("SESSION_NAME", "s16_session")
+session_name = os.getenv("SESSION_NAME", "example_session")
 session_path = str(SESSION_DIR / session_name)
 
 # Проверка конфигурации

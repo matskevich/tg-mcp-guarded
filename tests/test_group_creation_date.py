@@ -31,7 +31,7 @@ async def test_get_group_creation_date_with_id(
     group_manager = GroupManager(mock_telegram_client)
 
     # Тестируем с числовым ID
-    result = await group_manager.get_group_creation_date(-1002188344480)
+    result = await group_manager.get_group_creation_date(-1001234567890)
 
     assert result is not None
     assert result.year == 2024
@@ -54,7 +54,7 @@ async def test_get_group_creation_date_with_string_id(
     group_manager = GroupManager(mock_telegram_client)
 
     # Тестируем со строковым ID
-    result = await group_manager.get_group_creation_date("-1002188344480")
+    result = await group_manager.get_group_creation_date("-1001234567890")
 
     assert result is not None
     assert result.year == 2024
@@ -117,7 +117,7 @@ async def test_get_group_creation_date_no_messages(mock_telegram_client):
 
     group_manager = GroupManager(mock_telegram_client)
 
-    result = await group_manager.get_group_creation_date(-1002188344480)
+    result = await group_manager.get_group_creation_date(-1001234567890)
 
     assert result is None
 
@@ -136,6 +136,6 @@ async def test_get_group_creation_date_error(mock_telegram_client):
 
     group_manager = GroupManager(mock_telegram_client)
 
-    result = await group_manager.get_group_creation_date(-1002188344480)
+    result = await group_manager.get_group_creation_date(-1001234567890)
 
     assert result is None

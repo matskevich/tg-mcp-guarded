@@ -77,9 +77,7 @@ except ValueError:
 REQUIRE_CONFIRMATION_TEXT = (
     os.environ.get("TG_ACTIONS_REQUIRE_CONFIRMATION_TEXT", "1") == "1"
 )
-CONFIRMATION_PHRASE = (
-    os.environ.get("TG_ACTIONS_CONFIRMATION_PHRASE", "отправляй").strip().lower()
-)
+CONFIRMATION_PHRASE = os.environ.get("TG_ACTIONS_CONFIRMATION_PHRASE", "").strip().lower()
 REQUIRE_APPROVAL_CODE = os.environ.get("TG_ACTIONS_REQUIRE_APPROVAL_CODE", "1") == "1"
 IDEMPOTENCY_ENABLED = os.environ.get("TG_ACTIONS_IDEMPOTENCY_ENABLED", "1") == "1"
 IDEMPOTENCY_FILE = Path(

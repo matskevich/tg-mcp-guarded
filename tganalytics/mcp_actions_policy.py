@@ -27,7 +27,12 @@ def parse_allowlist(raw: str) -> set[str]:
 
 def hash_payload(payload: dict[str, Any]) -> str:
     """Stable hash for action payload."""
-    encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
 
@@ -53,6 +58,13 @@ def detect_unsafe_defaults(
         issues.append("TG_ACTIONS_ALLOWED_GROUPS must not be empty when allowlist is required")
     if not require_confirmation_text:
         issues.append("TG_ACTIONS_REQUIRE_CONFIRMATION_TEXT must be 1")
+    elif not env.get("TG_ACTIONS_CONFIRMATION_PHRASE", "").strip():
+        issues.append("TG_ACTIONS_CONFIRMATION_PHRASE must be set locally")
+    elif env.get("TG_ACTIONS_CONFIRMATION_PHRASE", "").strip().lower() in {
+        "change-me-local-confirmation-phrase",
+        "set-local-confirmation-phrase",
+    }:
+        issues.append("TG_ACTIONS_CONFIRMATION_PHRASE must not use the public placeholder")
     if not require_approval_code:
         issues.append("TG_ACTIONS_REQUIRE_APPROVAL_CODE must be 1")
     if not idempotency_enabled:

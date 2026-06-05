@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Скрипт для подготовки проекта S16-Leads к передаче другому разработчику.
+Скрипт для подготовки проекта tg-mcp к передаче другому разработчику.
 Автоматически очищает конфиденциальные данные и создает архив.
 """
 
@@ -14,7 +14,7 @@ from datetime import datetime
 
 def print_header():
     """Печатает заголовок скрипта"""
-    print("🚀 S16-Leads - Подготовка к передаче проекта")
+    print("🚀 tg-mcp - Подготовка к передаче проекта")
     print("=" * 50)
 
 
@@ -86,7 +86,7 @@ def find_sensitive_files():
 def create_transfer_directory():
     """Создает директорию для передачи"""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    transfer_dir = Path(f"../s16-leads-transfer-{timestamp}")
+    transfer_dir = Path(f"../tg-mcp-transfer-{timestamp}")
     
     print(f"\n📁 Создание директории передачи: {transfer_dir}")
     
@@ -158,7 +158,7 @@ def create_clean_env_sample(transfer_dir):
     env_sample_content = """# Telegram API ключи (получить на https://my.telegram.org/apps)
 TG_API_ID=
 TG_API_HASH=
-SESSION_NAME=s16_session
+SESSION_NAME=example_session
 
 # Anti-spam настройки
 RATE_RPS=4                      # Запросов в секунду
@@ -201,9 +201,9 @@ def create_setup_script(transfer_dir):
     print("\n📝 Создание скрипта быстрой настройки...")
     
     setup_script = """#!/bin/bash
-# Скрипт быстрой настройки S16-Leads
+# Скрипт быстрой настройки tg-mcp
 
-echo "🚀 Быстрая настройка S16-Leads"
+echo "🚀 Быстрая настройка tg-mcp"
 echo "================================"
 
 # Создание виртуального окружения
@@ -330,7 +330,7 @@ def main():
         
         # Проверка текущей директории
         if not Path("src").exists() or not Path("README.md").exists():
-            print("❌ Ошибка: Запустите скрипт из корневой директории проекта S16-Leads")
+            print("❌ Ошибка: Запустите скрипт из корневой директории проекта tg-mcp")
             sys.exit(1)
         
         # Проверка git статуса

@@ -51,7 +51,7 @@
 │   Code      │
 └──────┬──────┘
        │
-       │ manager.get_group_info("s16_space")
+       │ manager.get_group_info("example_group")
        ▼
 ┌─────────────────────────────────────┐
 │   GroupManager (groups.py)         │
@@ -121,7 +121,7 @@
 │  │    файл      │◄─────┤  Client       │  │
 │  │              │      │               │  │
 │  │ data/sessions│      │ TelegramClient│  │
-│  │ /s16_session │      │  (Telethon)   │  │
+│  │ /example_session │      │  (Telethon)   │  │
 │  │    .session  │      │               │  │
 │  └──────┬───────┘      └───────┬───────┘  │
 │         │                      │          │
@@ -413,7 +413,7 @@
 
 ```
 1. Developer Code
-   └─> manager.get_participants("s16_space", limit=100)
+   └─> manager.get_participants("example_group", limit=100)
        │
        ▼
 2. GroupManager
@@ -572,7 +572,7 @@ Developer → GroupManager → Safe Call → [Quotas + Token Bucket] → Client 
 ### Session файл:
 - Покажи как файл с расширением `.session`
 - Права доступа: `600` (rw-------)
-- Путь: `data/sessions/s16_session.session`
+- Путь: `data/sessions/example_session.session`
 - Внутри: токены авторизации (можно показать как зашифрованные данные)
 
 ### Token Bucket:

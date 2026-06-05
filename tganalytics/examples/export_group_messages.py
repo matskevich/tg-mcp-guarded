@@ -179,7 +179,7 @@ async def main():
     parser.add_argument(
         '--session-name',
         default=None,
-        help='Необязательная сессия (например: dmatskevich). Если не указано — используется дефолтная из .env (SESSION_NAME).'
+        help='Необязательная сессия (например: example_account). Если не указано — используется дефолтная из .env (SESSION_NAME).'
     )
     
     args = parser.parse_args()

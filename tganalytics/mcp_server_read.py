@@ -38,7 +38,7 @@ async def tg_list_sessions() -> dict:
 
 @mcp.tool()
 async def tg_use_session(session_name: str) -> dict:
-    """Switch to a different Telegram session (e.g. 'dmatskevich')."""
+    """Switch to a different Telegram session (e.g. 'example_account')."""
     return await ctx.use_session(session_name)
 
 

@@ -205,7 +205,7 @@ async def main() -> None:
     parser.add_argument(
         "--session-name",
         default=None,
-        help="Optional session override (e.g. dmatskevich). If omitted, uses default session from .env (SESSION_NAME).",
+        help="Optional session override (e.g. example_account). If omitted, uses default session from .env (SESSION_NAME).",
     )
     parser.add_argument("--group", action="append", default=[], help="Group id / @username / title (repeatable)")
     parser.add_argument("--groups-file", default=None, help="Path to a text file with group identifiers (one per line)")

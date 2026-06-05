@@ -121,7 +121,7 @@ async def test_send_message_requires_exact_confirmation_text(monkeypatch, tmp_pa
     monkeypatch.setattr(actions, "REQUIRE_ALLOWLIST", True)
     monkeypatch.setattr(actions, "ALLOWED_TARGETS", {"test_target"})
     monkeypatch.setattr(actions, "REQUIRE_CONFIRMATION_TEXT", True)
-    monkeypatch.setattr(actions, "CONFIRMATION_PHRASE", "отправляй")
+    monkeypatch.setattr(actions, "CONFIRMATION_PHRASE", "confirm-test-action")
     monkeypatch.setattr(actions, "REQUIRE_APPROVAL_CODE", False)
     monkeypatch.setattr(actions, "IDEMPOTENCY_ENABLED", False)
     monkeypatch.setattr(actions, "APPROVAL_FILE", tmp_path / "approvals.json")
@@ -145,13 +145,13 @@ async def test_create_private_group_requires_allowlisted_title(monkeypatch, tmp_
     monkeypatch.setattr(actions, "REQUIRE_ALLOWLIST", True)
     monkeypatch.setattr(actions, "ALLOWED_TARGETS", {"other_target"})
     monkeypatch.setattr(actions, "REQUIRE_CONFIRMATION_TEXT", True)
-    monkeypatch.setattr(actions, "CONFIRMATION_PHRASE", "отправляй")
+    monkeypatch.setattr(actions, "CONFIRMATION_PHRASE", "confirm-test-action")
     monkeypatch.setattr(actions, "REQUIRE_APPROVAL_CODE", True)
     monkeypatch.setattr(actions, "APPROVAL_FILE", tmp_path / "approvals.json")
 
     result = await actions.tg_create_private_group(
         title="email critical",
-        users=["@hermess260408bot"],
+        users=["@example_bot"],
         dry_run=True,
     )
 
@@ -166,7 +166,7 @@ async def test_create_private_group_runs_dry_run_then_confirm(monkeypatch, tmp_p
     monkeypatch.setattr(actions, "REQUIRE_ALLOWLIST", True)
     monkeypatch.setattr(actions, "ALLOWED_TARGETS", {"email critical"})
     monkeypatch.setattr(actions, "REQUIRE_CONFIRMATION_TEXT", True)
-    monkeypatch.setattr(actions, "CONFIRMATION_PHRASE", "отправляй")
+    monkeypatch.setattr(actions, "CONFIRMATION_PHRASE", "confirm-test-action")
     monkeypatch.setattr(actions, "REQUIRE_APPROVAL_CODE", True)
     monkeypatch.setattr(actions, "IDEMPOTENCY_ENABLED", False)
     monkeypatch.setattr(actions, "APPROVAL_TTL_SEC", 1800)
@@ -176,7 +176,7 @@ async def test_create_private_group_runs_dry_run_then_confirm(monkeypatch, tmp_p
 
     preview = await actions.tg_create_private_group(
         title="email critical",
-        users=["@hermess260408bot"],
+        users=["@example_bot"],
         dry_run=True,
     )
     assert preview["success"] is True
@@ -185,16 +185,16 @@ async def test_create_private_group_runs_dry_run_then_confirm(monkeypatch, tmp_p
 
     created = await actions.tg_create_private_group(
         title="email critical",
-        users=["@hermess260408bot"],
+        users=["@example_bot"],
         dry_run=False,
         confirm=True,
-        confirmation_text="отправляй",
+        confirmation_text="confirm-test-action",
         approval_code=approval_code,
     )
 
     assert created["success"] is True
     assert created["group_id"] == 123456789
-    assert created["invitees"][0]["input"] == "@hermess260408bot"
+    assert created["invitees"][0]["input"] == "@example_bot"
 
 
 @pytest.mark.asyncio
@@ -204,7 +204,7 @@ async def test_send_message_requires_one_time_approval_code(monkeypatch, tmp_pat
     monkeypatch.setattr(actions, "REQUIRE_ALLOWLIST", True)
     monkeypatch.setattr(actions, "ALLOWED_TARGETS", {"test_target"})
     monkeypatch.setattr(actions, "REQUIRE_CONFIRMATION_TEXT", True)
-    monkeypatch.setattr(actions, "CONFIRMATION_PHRASE", "отправляй")
+    monkeypatch.setattr(actions, "CONFIRMATION_PHRASE", "confirm-test-action")
     monkeypatch.setattr(actions, "REQUIRE_APPROVAL_CODE", True)
     monkeypatch.setattr(actions, "IDEMPOTENCY_ENABLED", False)
     monkeypatch.setattr(actions, "APPROVAL_TTL_SEC", 1800)
@@ -227,7 +227,7 @@ async def test_send_message_requires_one_time_approval_code(monkeypatch, tmp_pat
         message_text="hello",
         dry_run=False,
         confirm=True,
-        confirmation_text="отправляй",
+        confirmation_text="confirm-test-action",
     )
     assert blocked["success"] is False
     assert "approval_code" in blocked["error"]
@@ -237,7 +237,7 @@ async def test_send_message_requires_one_time_approval_code(monkeypatch, tmp_pat
         message_text="hello",
         dry_run=False,
         confirm=True,
-        confirmation_text="отправляй",
+        confirmation_text="confirm-test-action",
         approval_code=approval_code,
     )
     assert sent["success"] is True
@@ -247,7 +247,7 @@ async def test_send_message_requires_one_time_approval_code(monkeypatch, tmp_pat
         message_text="hello",
         dry_run=False,
         confirm=True,
-        confirmation_text="отправляй",
+        confirmation_text="confirm-test-action",
         approval_code=approval_code,
     )
     assert reused["success"] is False
@@ -263,7 +263,7 @@ async def test_send_message_blocks_immediate_execute_after_dry_run(
     monkeypatch.setattr(actions, "REQUIRE_ALLOWLIST", True)
     monkeypatch.setattr(actions, "ALLOWED_TARGETS", {"test_target"})
     monkeypatch.setattr(actions, "REQUIRE_CONFIRMATION_TEXT", True)
-    monkeypatch.setattr(actions, "CONFIRMATION_PHRASE", "отправляй")
+    monkeypatch.setattr(actions, "CONFIRMATION_PHRASE", "confirm-test-action")
     monkeypatch.setattr(actions, "REQUIRE_APPROVAL_CODE", True)
     monkeypatch.setattr(actions, "IDEMPOTENCY_ENABLED", False)
     monkeypatch.setattr(actions, "APPROVAL_TTL_SEC", 1800)
@@ -290,7 +290,7 @@ async def test_send_message_blocks_immediate_execute_after_dry_run(
         message_text="hello",
         dry_run=False,
         confirm=True,
-        confirmation_text="отправляй",
+        confirmation_text="confirm-test-action",
         approval_code=approval_code,
     )
     assert blocked["success"] is False
@@ -302,7 +302,7 @@ async def test_send_message_blocks_immediate_execute_after_dry_run(
         message_text="hello",
         dry_run=False,
         confirm=True,
-        confirmation_text="отправляй",
+        confirmation_text="confirm-test-action",
         approval_code=approval_code,
     )
     assert sent["success"] is True
@@ -317,7 +317,7 @@ async def test_set_channel_comments_join_requirement_requires_allowlisted_linked
     monkeypatch.setattr(actions, "REQUIRE_ALLOWLIST", True)
     monkeypatch.setattr(actions, "ALLOWED_TARGETS", {"other_target"})
     monkeypatch.setattr(actions, "REQUIRE_CONFIRMATION_TEXT", True)
-    monkeypatch.setattr(actions, "CONFIRMATION_PHRASE", "отправляй")
+    monkeypatch.setattr(actions, "CONFIRMATION_PHRASE", "confirm-test-action")
     monkeypatch.setattr(actions, "REQUIRE_APPROVAL_CODE", True)
     monkeypatch.setattr(actions, "IDEMPOTENCY_ENABLED", False)
     monkeypatch.setattr(actions, "APPROVAL_FILE", tmp_path / "approvals.json")
@@ -343,7 +343,7 @@ async def test_set_channel_comments_join_requirement_executes_after_dry_run(
     monkeypatch.setattr(actions, "REQUIRE_ALLOWLIST", True)
     monkeypatch.setattr(actions, "ALLOWED_TARGETS", {"matskevich_chat"})
     monkeypatch.setattr(actions, "REQUIRE_CONFIRMATION_TEXT", True)
-    monkeypatch.setattr(actions, "CONFIRMATION_PHRASE", "отправляй")
+    monkeypatch.setattr(actions, "CONFIRMATION_PHRASE", "confirm-test-action")
     monkeypatch.setattr(actions, "REQUIRE_APPROVAL_CODE", True)
     monkeypatch.setattr(actions, "IDEMPOTENCY_ENABLED", False)
     monkeypatch.setattr(actions, "APPROVAL_TTL_SEC", 1800)
@@ -365,7 +365,7 @@ async def test_set_channel_comments_join_requirement_executes_after_dry_run(
         join_required=False,
         dry_run=False,
         confirm=True,
-        confirmation_text="отправляй",
+        confirmation_text="confirm-test-action",
         approval_code=approval_code,
     )
 
@@ -381,7 +381,7 @@ async def test_delete_messages_requires_one_time_approval_code(monkeypatch, tmp_
     monkeypatch.setattr(actions, "REQUIRE_ALLOWLIST", True)
     monkeypatch.setattr(actions, "ALLOWED_TARGETS", {"test_target"})
     monkeypatch.setattr(actions, "REQUIRE_CONFIRMATION_TEXT", True)
-    monkeypatch.setattr(actions, "CONFIRMATION_PHRASE", "отправляй")
+    monkeypatch.setattr(actions, "CONFIRMATION_PHRASE", "confirm-test-action")
     monkeypatch.setattr(actions, "REQUIRE_APPROVAL_CODE", True)
     monkeypatch.setattr(actions, "IDEMPOTENCY_ENABLED", False)
     monkeypatch.setattr(actions, "APPROVAL_TTL_SEC", 1800)
@@ -403,7 +403,7 @@ async def test_delete_messages_requires_one_time_approval_code(monkeypatch, tmp_
         message_ids=[101, 102],
         dry_run=False,
         confirm=True,
-        confirmation_text="отправляй",
+        confirmation_text="confirm-test-action",
         approval_code=approval_code,
     )
 
@@ -419,7 +419,7 @@ async def test_leave_dialog_requires_one_time_approval_code(monkeypatch, tmp_pat
     monkeypatch.setattr(actions, "REQUIRE_ALLOWLIST", True)
     monkeypatch.setattr(actions, "ALLOWED_TARGETS", {"test_channel"})
     monkeypatch.setattr(actions, "REQUIRE_CONFIRMATION_TEXT", True)
-    monkeypatch.setattr(actions, "CONFIRMATION_PHRASE", "отправляй")
+    monkeypatch.setattr(actions, "CONFIRMATION_PHRASE", "confirm-test-action")
     monkeypatch.setattr(actions, "REQUIRE_APPROVAL_CODE", True)
     monkeypatch.setattr(actions, "IDEMPOTENCY_ENABLED", False)
     monkeypatch.setattr(actions, "APPROVAL_TTL_SEC", 1800)
@@ -436,7 +436,7 @@ async def test_leave_dialog_requires_one_time_approval_code(monkeypatch, tmp_pat
         group="test_channel",
         dry_run=False,
         confirm=True,
-        confirmation_text="отправляй",
+        confirmation_text="confirm-test-action",
         approval_code=approval_code,
     )
 
@@ -452,7 +452,7 @@ async def test_forward_messages_requires_allowlisted_source(monkeypatch, tmp_pat
     monkeypatch.setattr(actions, "REQUIRE_ALLOWLIST", True)
     monkeypatch.setattr(actions, "ALLOWED_TARGETS", {"target_only"})
     monkeypatch.setattr(actions, "REQUIRE_CONFIRMATION_TEXT", True)
-    monkeypatch.setattr(actions, "CONFIRMATION_PHRASE", "отправляй")
+    monkeypatch.setattr(actions, "CONFIRMATION_PHRASE", "confirm-test-action")
     monkeypatch.setattr(actions, "REQUIRE_APPROVAL_CODE", False)
     monkeypatch.setattr(actions, "IDEMPOTENCY_ENABLED", False)
     monkeypatch.setattr(actions, "APPROVAL_FILE", tmp_path / "approvals.json")

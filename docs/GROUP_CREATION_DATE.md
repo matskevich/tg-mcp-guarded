@@ -9,7 +9,7 @@
 ### CLI Usage
 ```bash
 # Получить дату создания группы
-python3 src/cli.py creation-date "-1002188344480"
+python3 src/cli.py creation-date "-1001234567890"
 python3 src/cli.py creation-date "@testgroup" 
 python3 src/cli.py creation-date "1234567890"
 ```
@@ -24,7 +24,7 @@ async def get_creation_date():
     await client.start()
     
     manager = GroupManager(client)
-    creation_date = await manager.get_group_creation_date("-1002188344480")
+    creation_date = await manager.get_group_creation_date("-1001234567890")
     
     if creation_date:
         print(f"Group created: {creation_date}")
@@ -64,8 +64,8 @@ async for msg in client.iter_messages(group_id, reverse=True, limit=1):
 
 | Input Type | Example | Обработка |
 |------------|---------|-----------|
-| Negative ID | `-1002188344480` | Прямое использование |
-| String ID | `"-1002188344480"` | Конвертация в int |
+| Negative ID | `-1001234567890` | Прямое использование |
+| String ID | `"-1001234567890"` | Конвертация в int |
 | Username | `"testgroup"` | Добавление @ префикса |
 | Username with @ | `"@testgroup"` | Прямое использование |
 
@@ -160,7 +160,7 @@ async for msg in client.iter_messages(group_id, reverse=True, limit=1):
 
 ### Batch Processing
 ```python
-group_ids = [-1002188344480, -1002609724956, -1002214341140]
+group_ids = [-1001234567890, -1002234567890, -1003234567890]
 
 for group_id in group_ids:
     date = await manager.get_group_creation_date(group_id)

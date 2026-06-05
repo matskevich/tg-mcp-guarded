@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Скрипт для проверки безопасности проекта S16-Leads
+Скрипт для проверки безопасности проекта tg-mcp
 """
 
 import os
@@ -32,7 +32,7 @@ def check_git_ignored(file_path):
         return False
 
 def main():
-    print("🔍 Проверка безопасности проекта S16-Leads\n")
+    print("🔍 Проверка безопасности проекта tg-mcp\n")
     
     # Проверка .env файла
     print("1. Проверка .env файла:")

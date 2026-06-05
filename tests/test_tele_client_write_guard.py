@@ -126,7 +126,7 @@ def test_get_client_disables_updates_loop_by_default(monkeypatch, tmp_path):
 
 
 def test_describe_session_target_uses_runtime_copy_for_existing_session(monkeypatch, tmp_path):
-    source = tmp_path / "dmatskevich_ro.session"
+    source = tmp_path / "example_account_ro.session"
     source.write_text("seed", encoding="utf-8")
 
     monkeypatch.setattr(tele_client, "SESSION_RUNTIME_MODE", "copy")
@@ -141,7 +141,7 @@ def test_describe_session_target_uses_runtime_copy_for_existing_session(monkeypa
 
 
 def test_get_client_for_session_uses_runtime_copy_when_enabled(monkeypatch, tmp_path):
-    source = tmp_path / "dmatskevich_ro.session"
+    source = tmp_path / "example_account_ro.session"
     with sqlite3.connect(str(source)) as conn:
         conn.execute("create table version (value text)")
         conn.execute("insert into version values ('shadow-copy-ok')")

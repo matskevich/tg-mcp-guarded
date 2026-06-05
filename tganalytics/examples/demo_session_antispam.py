@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-🎬 Демо: Session + Anti-Spam система S16-Leads
+🎬 Демо: Session + Anti-Spam система tg-mcp
 
 Показывает работу всех компонентов системы:
 1. Session Management (создание и использование)
@@ -293,7 +293,7 @@ async def demo_integration(client):
     
     print_step(2, "Получение информации о группе")
     print_info("Попробуем получить информацию о группе...")
-    print_info("(Используй username группы или ID, например: 's16_space' или '-1002188344480')")
+    print_info("(Используй username группы или ID, например: 'example_group' или '-1001234567890')")
     
     # Можно использовать тестовую группу или попросить пользователя ввести
     group_id = input(f"{Colors.CYAN}Введите ID/username группы (или Enter для пропуска): {Colors.END}").strip()
@@ -345,7 +345,7 @@ async def demo_integration(client):
 
 async def main():
     """Главная функция демо"""
-    print_header("🎬 ДЕМО: Session + Anti-Spam система S16-Leads")
+    print_header("🎬 ДЕМО: Session + Anti-Spam система tg-mcp")
     
     print_info("Это демо покажет работу всех компонентов системы:")
     print("  1. Session Management - создание и использование session-файлов")

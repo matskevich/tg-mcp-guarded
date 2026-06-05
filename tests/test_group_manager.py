@@ -525,7 +525,7 @@ async def test_create_private_group_dry_run_resolves_invitees(
     group_manager = GroupManager(mock_telegram_client)
     result = await group_manager.create_private_group(
         "email critical",
-        users=["@hermess260408bot"],
+        users=["@example_bot"],
         dry_run=True,
     )
 
@@ -542,7 +542,7 @@ async def test_create_private_group_executes_create_and_invite(
 ):
     """Execute path создает basic private group с initial invitee."""
     mock_chat = MagicMock(spec=Chat)
-    mock_chat.id = -4697000000
+    mock_chat.id = -4000000000
     mock_chat.title = "email critical"
     mock_chat.participants_count = 2
     mock_telegram_client.get_entity.return_value = mock_user
@@ -553,7 +553,7 @@ async def test_create_private_group_executes_create_and_invite(
     group_manager = GroupManager(mock_telegram_client)
     result = await group_manager.create_private_group(
         "email critical",
-        users=["@hermess260408bot"],
+        users=["@example_bot"],
         dry_run=False,
     )
 
@@ -576,7 +576,7 @@ async def test_create_private_group_falls_back_to_dialog_title(
     from tests.conftest import AsyncIteratorMock
 
     mock_chat = MagicMock(spec=Chat)
-    mock_chat.id = -4697000000
+    mock_chat.id = -4000000000
     mock_chat.title = "email critical"
     mock_chat.participants_count = 2
     mock_telegram_client.get_entity.return_value = mock_user
@@ -594,7 +594,7 @@ async def test_create_private_group_falls_back_to_dialog_title(
     group_manager = GroupManager(mock_telegram_client)
     result = await group_manager.create_private_group(
         "email critical",
-        users=["@hermess260408bot"],
+        users=["@example_bot"],
         dry_run=False,
     )
 

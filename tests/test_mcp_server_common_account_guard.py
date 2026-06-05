@@ -31,7 +31,7 @@ class DummyClient:
 
 @pytest.mark.asyncio
 async def test_connect_client_fails_fast_on_expected_username_mismatch(monkeypatch):
-    monkeypatch.setenv("TG_EXPECTED_USERNAME", "@dmatskevich")
+    monkeypatch.setenv("TG_EXPECTED_USERNAME", "@example_account")
     ctx = common.MCPServerContext(allow_session_switch=False)
     client = DummyClient(username="other_user")
 
@@ -43,9 +43,9 @@ async def test_connect_client_fails_fast_on_expected_username_mismatch(monkeypat
 
 @pytest.mark.asyncio
 async def test_connect_client_allows_expected_username_case_insensitive(monkeypatch):
-    monkeypatch.setenv("TG_EXPECTED_USERNAME", "dmatskevich")
+    monkeypatch.setenv("TG_EXPECTED_USERNAME", "example_account")
     ctx = common.MCPServerContext(allow_session_switch=False)
-    client = DummyClient(username="DmAtSkEvIcH")
+    client = DummyClient(username="ExAmPlE_Account")
 
     manager = await ctx._connect_client(client, "test_session")
 
@@ -55,7 +55,7 @@ async def test_connect_client_allows_expected_username_case_insensitive(monkeypa
 
 @pytest.mark.asyncio
 async def test_auth_status_reports_mismatch_as_unauthorized(monkeypatch):
-    monkeypatch.setenv("TG_EXPECTED_USERNAME", "dmatskevich")
+    monkeypatch.setenv("TG_EXPECTED_USERNAME", "example_account")
     monkeypatch.delenv("TG_SESSION_PATH", raising=False)
 
     ctx = common.MCPServerContext(allow_session_switch=False)
@@ -69,7 +69,7 @@ async def test_auth_status_reports_mismatch_as_unauthorized(monkeypatch):
 
 
 def test_detect_declared_session_conflict_same_paths(monkeypatch, tmp_path):
-    session_path = str((tmp_path / "dmatskevich.session").resolve())
+    session_path = str((tmp_path / "example_account.session").resolve())
     monkeypatch.setenv("TG_READ_SESSION_PATH", session_path)
     monkeypatch.setenv("TG_ACTIONS_SESSION_PATH", session_path)
 
@@ -81,7 +81,7 @@ def test_detect_declared_session_conflict_same_paths(monkeypatch, tmp_path):
 
 
 def test_context_fail_fast_on_same_session_conflict(monkeypatch, tmp_path):
-    session_path = str((tmp_path / "dmatskevich.session").resolve())
+    session_path = str((tmp_path / "example_account.session").resolve())
     monkeypatch.setenv("TG_SESSION_PATH", session_path)
     monkeypatch.setenv("TG_READ_SESSION_PATH", session_path)
     monkeypatch.setenv("TG_ACTIONS_SESSION_PATH", session_path)
@@ -92,7 +92,7 @@ def test_context_fail_fast_on_same_session_conflict(monkeypatch, tmp_path):
 
 
 def test_detect_live_session_conflict_same_profile_same_session(monkeypatch, tmp_path):
-    session_path = str((tmp_path / "dmatskevich_ro.session").resolve())
+    session_path = str((tmp_path / "example_account_ro.session").resolve())
     registry_file = tmp_path / "session_registry.json"
     registry_file.write_text(
         (
@@ -122,7 +122,7 @@ def test_detect_live_session_conflict_same_profile_same_session(monkeypatch, tmp
 
 
 def test_session_path_status_reports_effective_runtime_copy(monkeypatch, tmp_path):
-    session_path = str((tmp_path / "dmatskevich_ro.session").resolve())
+    session_path = str((tmp_path / "example_account_ro.session").resolve())
     runtime_path = str((tmp_path / "runtime" / "shadow.session").resolve())
 
     monkeypatch.setenv("TG_SESSION_PATH", session_path)

@@ -159,18 +159,18 @@ manager = GroupManager(client)
 
 ```python
 # By username
-info = await manager.get_group_info("s16_space")
+info = await manager.get_group_info("example_group")
 
 # By numeric ID
-info = await manager.get_group_info(-1002188344480)
+info = await manager.get_group_info(-1001234567890)
 
 # By string ID
-info = await manager.get_group_info("-1002188344480")
+info = await manager.get_group_info("-1001234567890")
 
 # Returns: {
-#   'id': -1002188344480,
+#   'id': -1001234567890,
 #   'title': 'S16 Space',
-#   'username': 's16_space',
+#   'username': 'example_group',
 #   'participants_count': 1234,
 #   'type': 'channel'
 # }
@@ -180,7 +180,7 @@ info = await manager.get_group_info("-1002188344480")
 
 ```python
 # Get all participants (with limit)
-participants = await manager.get_participants("s16_space", limit=1000)
+participants = await manager.get_participants("example_group", limit=1000)
 
 # Returns list of dicts:
 # [{
@@ -199,13 +199,13 @@ participants = await manager.get_participants("s16_space", limit=1000)
 
 ```python
 # Get all messages
-messages = await manager.get_messages("s16_space")
+messages = await manager.get_messages("example_group")
 
 # Get last 1000 messages
-messages = await manager.get_messages("s16_space", limit=1000)
+messages = await manager.get_messages("example_group", limit=1000)
 
 # Continue from specific message ID
-messages = await manager.get_messages("s16_space", min_id=5000)
+messages = await manager.get_messages("example_group", min_id=5000)
 
 # Returns list of dicts:
 # [{
@@ -225,14 +225,14 @@ messages = await manager.get_messages("s16_space", min_id=5000)
 ```python
 # Export participants to CSV
 success = await manager.export_participants_to_csv(
-    "s16_space",
+    "example_group",
     "output.csv",
     limit=1000
 )
 
 # Export messages to JSON (custom)
 import json
-messages = await manager.get_messages("s16_space")
+messages = await manager.get_messages("example_group")
 with open("messages.json", "w") as f:
     json.dump(messages, f, indent=2)
 ```
@@ -245,7 +245,7 @@ from tganalytics.infra.limiter import safe_call
 # All Telegram API calls should use safe_call
 entity = await safe_call(
     client.get_entity,
-    "s16_space",
+    "example_group",
     operation_type="api"
 )
 
@@ -268,7 +268,7 @@ TG_API_ID=12345678
 TG_API_HASH=your_api_hash_here
 
 # Session settings
-SESSION_NAME=s16_session
+SESSION_NAME=example_session
 SESSION_DIR=data/sessions
 
 # Anti-spam settings
@@ -354,15 +354,15 @@ async def main():
     manager = GroupManager(client)
     
     # Get group info
-    info = await manager.get_group_info("s16_space")
+    info = await manager.get_group_info("example_group")
     print(f"Group: {info['title']}, Members: {info['participants_count']}")
     
     # Get participants
-    participants = await manager.get_participants("s16_space", limit=100)
+    participants = await manager.get_participants("example_group", limit=100)
     print(f"Found {len(participants)} participants")
     
     # Get messages
-    messages = await manager.get_messages("s16_space", limit=1000)
+    messages = await manager.get_messages("example_group", limit=1000)
     print(f"Found {len(messages)} messages")
     
     # Check stats

@@ -7,6 +7,7 @@ def _safe_env() -> dict[str, str]:
         "TG_ALLOW_DIRECT_TELETHON_WRITE": "0",
         "TG_ENFORCE_ACTION_PROCESS": "1",
         "TG_ACTIONS_ALLOWED_GROUPS": "-1001234567890",
+        "TG_ACTIONS_CONFIRMATION_PHRASE": "confirm-test-action",
     }
 
 

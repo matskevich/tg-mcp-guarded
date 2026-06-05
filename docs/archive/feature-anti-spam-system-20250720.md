@@ -10,7 +10,7 @@
 
 ## Summary
 
-Successfully implemented a production-ready anti-spam protection system for all Telegram API interactions in the S16-Leads project. The system provides comprehensive rate limiting, daily quotas, intelligent retry logic, and seamless integration with existing code. The implementation was validated in production with 386+ real participants from S16 groups, achieving 100% success rate with zero API blocks.
+Successfully implemented a production-ready anti-spam protection system for all Telegram API interactions in the tg-mcp project. The system provides comprehensive rate limiting, daily quotas, intelligent retry logic, and seamless integration with existing code. The implementation was validated in production with 386+ real participants from S16 groups, achieving 100% success rate with zero API blocks.
 
 This Level 3 feature represents a critical infrastructure enhancement that protects the application from Telegram's anti-spam restrictions while maintaining optimal performance and user experience.
 

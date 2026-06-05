@@ -80,7 +80,7 @@ def _build_actions_server(
         "TG_ACTIONS_MAX_MESSAGE_LEN": "2000",
         "TG_ACTIONS_MAX_FILE_MB": "20",
         "TG_ACTIONS_REQUIRE_CONFIRMATION_TEXT": "1",
-        "TG_ACTIONS_CONFIRMATION_PHRASE": "отправляй",
+        "TG_ACTIONS_CONFIRMATION_PHRASE": "",
         "TG_ACTIONS_MIN_CONFIRM_TEXT_LEN": "6",
         "TG_ACTIONS_REQUIRE_APPROVAL_CODE": "1",
         "TG_ACTIONS_APPROVAL_TTL_SEC": "1800",
@@ -88,7 +88,9 @@ def _build_actions_server(
         "TG_ACTIONS_APPROVAL_FILE": str((repo / "data/anti_spam/action_approvals.json").resolve()),
         "TG_ACTIONS_IDEMPOTENCY_ENABLED": "1",
         "TG_ACTIONS_IDEMPOTENCY_WINDOW_SEC": "86400",
-        "TG_ACTIONS_IDEMPOTENCY_FILE": str((repo / "data/anti_spam/action_idempotency.json").resolve()),
+        "TG_ACTIONS_IDEMPOTENCY_FILE": str(
+            (repo / "data/anti_spam/action_idempotency.json").resolve()
+        ),
         "TG_ACTIONS_BATCH_FILE": str((repo / "data/anti_spam/action_batches.json").resolve()),
         "TG_ACTIONS_BATCH_TTL_HOURS": "168",
         "TG_ACTIONS_BATCH_APPROVAL_LEASE_SEC": "86400",
@@ -135,7 +137,7 @@ def main() -> int:
     parser.add_argument(
         "--expected-username",
         default="",
-        help="Optional expected @username for session fail-fast checks (example: dmatskevich)",
+        help="Optional expected @username for session fail-fast checks (example: example_account)",
     )
     parser.add_argument("--output", help="Write result to file; default stdout")
     args = parser.parse_args()
@@ -143,7 +145,9 @@ def main() -> int:
     repo = Path(args.repo).expanduser().resolve()
     servers = {}
     read_session_path = str((repo / f"data/sessions/{args.read_session_name}.session").resolve())
-    actions_session_path = str((repo / f"data/sessions/{args.actions_session_name}.session").resolve())
+    actions_session_path = str(
+        (repo / f"data/sessions/{args.actions_session_name}.session").resolve()
+    )
     if args.profile == "full" and read_session_path == actions_session_path:
         print(
             "[tg-mcp][session-warning] read/actions resolve to the same session file. "

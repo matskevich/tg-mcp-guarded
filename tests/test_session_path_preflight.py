@@ -8,7 +8,7 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "check_session_paths.
 
 
 def test_preflight_script_rejects_same_session_paths(tmp_path):
-    session_path = str((tmp_path / "dmatskevich.session").resolve())
+    session_path = str((tmp_path / "example_account.session").resolve())
     result = subprocess.run(
         [
             sys.executable,
@@ -32,10 +32,10 @@ def test_preflight_script_accepts_separate_paths_from_config(tmp_path):
     payload = {
         "mcpServers": {
             "tgmcp-read": {
-                "env": {"TG_SESSION_PATH": str((tmp_path / "dmatskevich_ro.session").resolve())}
+                "env": {"TG_SESSION_PATH": str((tmp_path / "example_account_ro.session").resolve())}
             },
             "tgmcp-actions": {
-                "env": {"TG_SESSION_PATH": str((tmp_path / "dmatskevich.session").resolve())}
+                "env": {"TG_SESSION_PATH": str((tmp_path / "example_account.session").resolve())}
             },
         }
     }
