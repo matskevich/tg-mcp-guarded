@@ -33,6 +33,13 @@ Action MCP is fail-closed: if baseline is weakened, writes are auto-blocked unle
 | `TG_ACTIONS_BATCH_TTL_HOURS` | `168` | shorten | expire stale batches earlier |
 | `TG_ACTIONS_BATCH_APPROVAL_LEASE_SEC` | `86400` | shorten/extend | one-time approval window |
 | `TG_ACTIONS_BATCH_RUN_LEASE_SEC` | `1800` | increase | very long batch worker runs |
+| `TG_ACTIONS_LANE_MAX_TTL_SEC` | `86400` | shorten | maximum delegated lane lifetime |
+| `TG_ACTIONS_LANE_APPROVAL_TTL_SEC` | `1800` | increase slightly | slow review of a pending lane |
+| `TG_ACTIONS_LANE_MAX_TARGETS` | `20` | lower | cap chats in one lane |
+| `TG_ACTIONS_LANE_MAX_MESSAGES` | `50` | lower | cap total sends in one lane |
+| `TG_ACTIONS_LANE_MIN_INTERVAL_SEC` | `30` | increase | reduce automatic follow-up frequency |
+| `TG_ACTIONS_LANE_SEND_LOCK_SEC` | `120` | increase | unusually slow Telegram sends |
+| `TG_ACTIONS_LANE_AUDIT_MAX_RECORDS` | `200` | lower/raise | local metadata audit retention |
 | `TG_SESSION_LOCK_MODE` | `shared` | `exclusive` | strict one-process-per-session |
 | `TG_GLOBAL_RPS_MODE` | `shared` | `local` | isolated throttling per project |
 
@@ -53,6 +60,21 @@ Action MCP is fail-closed: if baseline is weakened, writes are auto-blocked unle
 3. Verify new targets in `tg_get_actions_policy.allowed_targets`.
 4. Run mission.
 5. Remove temporary targets after mission and restart again.
+
+### Delegate a time-bounded conversational lane
+
+1. Keep every requested lane target in `TG_ACTIONS_ALLOWED_GROUPS`.
+2. Call `tg_create_write_lane` with the smallest practical TTL, target set, quotas,
+   interval and message length. Keep links disabled unless required.
+3. Show the returned scope to the user and activate it once with
+   `tg_approve_write_lane` plus exact confirmation text and `approval_code`.
+4. Let the external monitor read through `tgmcp-read` and send only through
+   `tg_send_message_with_lane`.
+5. Inspect with `tg_get_write_lane(include_audit=true)` and call
+   `tg_revoke_write_lane` as soon as the mission ends.
+
+Changing a server maximum does not expand an already approved lane. A new target or
+broader scope requires a new lane and a fresh human approval.
 
 ### Emergency lock-down
 

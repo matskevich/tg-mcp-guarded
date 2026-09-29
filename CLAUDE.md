@@ -58,6 +58,8 @@ Read/Actions MCP tools для доступа к Telegram API:
 | `tg_get_stats` | Статистика anti-spam |
 | `tg_send_message` | Отправка сообщения (actions profile: dry_run -> approval_code -> confirm=true + confirmation_text) |
 | `tg_send_file` | Отправка файла (actions profile: dry_run -> approval_code -> confirm=true + confirmation_text) |
+| `tg_click_inline_button` | Нажатие inline-кнопки бота (actions profile: dry_run -> approval_code -> confirm=true + confirmation_text) |
+| `tg_run_bot_steps` | Серия действий в bot-dialog за один approval (send/click/wait) |
 | `tg_get_actions_policy` | Активные write-ограничения |
 
 ## Использование из другого проекта
@@ -121,6 +123,14 @@ Read/Actions MCP tools для доступа к Telegram API:
         "TG_ACTIONS_BATCH_TTL_HOURS": "168",
         "TG_ACTIONS_BATCH_APPROVAL_LEASE_SEC": "86400",
         "TG_ACTIONS_BATCH_RUN_LEASE_SEC": "1800",
+        "TG_ACTIONS_LANE_FILE": "/absolute/path/to/tg-mcp/data/anti_spam/action_lanes.json",
+        "TG_ACTIONS_LANE_MAX_TTL_SEC": "86400",
+        "TG_ACTIONS_LANE_APPROVAL_TTL_SEC": "1800",
+        "TG_ACTIONS_LANE_MAX_TARGETS": "20",
+        "TG_ACTIONS_LANE_MAX_MESSAGES": "50",
+        "TG_ACTIONS_LANE_MIN_INTERVAL_SEC": "30",
+        "TG_ACTIONS_LANE_SEND_LOCK_SEC": "120",
+        "TG_ACTIONS_LANE_AUDIT_MAX_RECORDS": "200",
         "TG_ACTIONS_UNSAFE_OVERRIDE": "0",
         "TG_BLOCK_DIRECT_TELETHON_WRITE": "1",
         "TG_ALLOW_DIRECT_TELETHON_WRITE": "0",

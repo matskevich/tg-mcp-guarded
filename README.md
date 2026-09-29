@@ -1,5 +1,7 @@
 # tg-mcp (tg-mcp-guarded)
 
+[хендоф и установка на своём аккаунте](docs/HANDOFF.md) · обновление 2026-09-29
+
 MCP server + Python library for Telegram API with built-in rate limiting, anti-spam protection, and session management.
 
 Dual-plane Telegram MCP: read-only analytics + guarded write actions with anti-spam and block-risk controls.
@@ -27,7 +29,7 @@ Dual-plane Telegram MCP: read-only analytics + guarded write actions with anti-s
 
 ```bash
 # Install dependencies
-python3 -m venv venv
+python3.11 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 
@@ -112,6 +114,7 @@ Start here if this repository will be used by other AI agents/operators:
 
 - [Agent Playbook](docs/AGENT_PLAYBOOK.md) - execution flows, error handling, batch workflow
 - [Action Policy Toggles](docs/ACTION_POLICY_TOGGLES.md) - what can be toggled and safe change procedure
+- [Time-bounded Write Lanes](docs/TIME_BOUNDED_WRITE_LANES.md) - one approval for constrained conversational follow-ups
 - [Anti-spam and Security Model](docs/ANTISPAM_SECURITY.md) - deeper technical details
 
 ## Installation Profiles
@@ -273,6 +276,14 @@ Add to your project's `.mcp.json`:
         "TG_ACTIONS_BATCH_TTL_HOURS": "168",
         "TG_ACTIONS_BATCH_APPROVAL_LEASE_SEC": "86400",
         "TG_ACTIONS_BATCH_RUN_LEASE_SEC": "1800",
+        "TG_ACTIONS_LANE_FILE": "data/anti_spam/action_lanes.json",
+        "TG_ACTIONS_LANE_MAX_TTL_SEC": "86400",
+        "TG_ACTIONS_LANE_APPROVAL_TTL_SEC": "1800",
+        "TG_ACTIONS_LANE_MAX_TARGETS": "20",
+        "TG_ACTIONS_LANE_MAX_MESSAGES": "50",
+        "TG_ACTIONS_LANE_MIN_INTERVAL_SEC": "30",
+        "TG_ACTIONS_LANE_SEND_LOCK_SEC": "120",
+        "TG_ACTIONS_LANE_AUDIT_MAX_RECORDS": "200",
         "TG_ACTIONS_UNSAFE_OVERRIDE": "0",
         "TG_BLOCK_DIRECT_TELETHON_WRITE": "1",
         "TG_ALLOW_DIRECT_TELETHON_WRITE": "0",
@@ -324,7 +335,12 @@ Add to your project's `.mcp.json`:
 | `tg_get_my_dialogs` | Browse possible targets |
 | `tg_resolve_username` | Resolve target username |
 | `tg_send_message` | Send message with anti-spam + policy gates (`confirm=true` + exact `confirmation_text` + one-time `approval_code`) |
+| `tg_pin_message` | pin a message with the same approval and idempotency gates |
+| `tg_set_channel_comments_join_requirement` | change join-to-comment policy for an allowlisted linked discussion group |
+| `tg_create_managed_bot` | experimental managed-bot creation; parse failures can return `outcome_unknown` |
 | `tg_send_file` | Send local file with anti-spam + policy gates (`confirm=true` + exact `confirmation_text` + one-time `approval_code`) |
+| `tg_click_inline_button` | Click an inline bot callback button by `message_id` + text/row/col/data (`dry_run` preview first; same confirm + approval gates on execution) |
+| `tg_run_bot_steps` | Run a pre-approved sequence of bot `send_message`/`click_button`/`wait` steps in one allowlisted dialog |
 | `tg_delete_messages` | Delete specific messages in a dialog/group (`dry_run` by default; same confirm + approval gates on execution) |
 | `tg_clear_history` | Clear dialog history with `DeleteHistoryRequest` (`dry_run` by default; same confirm + approval gates on execution) |
 | `tg_leave_dialog` | Leave an allowlisted channel/group (`dry_run` by default; same confirm + approval gates on execution) |
@@ -342,6 +358,12 @@ Add to your project's `.mcp.json`:
 | `tg_run_add_member_batch` | Run approved batch in chunks (no per-group approvals) |
 | `tg_run_delete_messages_batch` | Run approved delete batch in chunks |
 | `tg_run_leave_dialog_batch` | Run approved leave-dialog batch in chunks |
+| `tg_create_write_lane` | Create an inert, immutable send-message scope for explicit chats, TTL and quotas |
+| `tg_approve_write_lane` | Activate one lane with exact confirmation text and a one-time approval code |
+| `tg_get_write_lane` | Inspect lane status and optional metadata-only audit |
+| `tg_list_write_lanes` | List lanes, optionally filtered by status |
+| `tg_send_message_with_lane` | Send text without per-message approval inside an active lane |
+| `tg_revoke_write_lane` | Immediately block new sends for a lane without another approval |
 | `tg_get_actions_policy` | Show active action restrictions |
 | `tg_get_stats` | Anti-spam system stats |
 | `tg_auth_status` | Check current session authorization status |
@@ -358,6 +380,8 @@ Add to your project's `.mcp.json`:
 - If both profiles point to one sqlite session file, Telethon can fail with `database is locked`.
 - Set `TG_READ_SESSION_PATH` + `TG_ACTIONS_SESSION_PATH` in both server envs so runtime can warn/fail on same-session misconfig.
 - `TG_SESSION_PATH_CONFLICT_MODE=warn` prints startup/runtime warning; set `fail` to block server start on same-session conflict.
+- `TG_SESSION_IDLE_TAKEOVER_SEC=300` — how long an actions owner may sit idle before another process may take the session (`0` disables takeover). The actions server no longer claims the session at startup: it starts regardless, takes ownership on the first Telegram call, refreshes that claim on every call, and a refused claim fails the tool call naming the owning pid instead of killing the whole MCP server.
+- `TG_DATA_DIR` sets the state root (default `<repo>/data`). counters, session registry, approvals, batches and write lanes resolve their default paths there. explicit relative state-file paths resolve against the repository root, so launching from another directory cannot fork these safety records.
 - Run `python3 scripts/check_session_paths.py --config /path/to/.mcp.json` before enabling both servers.
 - If a Codex thread did not expose native `mcp__tgmcp_actions__*` tools, use `python3 scripts/tg_action_bridge.py ...` as a shell fallback. The bridge still talks to `mcp_server_actions.py` over MCP/JSON-RPC, defaults to `TG_SESSION_RUNTIME_MODE=copy`, and preserves the same allowlist/approval/confirm policy.
 - `TG_EXPECTED_USERNAME` enables fail-fast on session/account mismatch (`@expected` vs actual account in session).
@@ -368,10 +392,12 @@ Add to your project's `.mcp.json`:
 - Non-dry-run write actions also require one-time `approval_code` from the matching `dry_run` preview (`TG_ACTIONS_REQUIRE_APPROVAL_CODE=1`).
 - `approval_code` has minimum age (`TG_ACTIONS_APPROVAL_MIN_AGE_SEC`, default 30s): immediate execute right after dry_run is blocked.
 - Action MCP blocks duplicate sends/actions by payload hash for 24h (`TG_ACTIONS_IDEMPOTENCY_*`), unless `force_resend=true`.
-- Action state files (`approval/idempotency/batch`) now use file locks + atomic write, so parallel ActionMCP processes do not corrupt JSON state.
+- Action state files (`approval/idempotency/batch/lane`) use file locks + atomic write, so parallel ActionMCP processes do not corrupt JSON state.
 - Batch execution uses a per-batch run lease lock (`TG_ACTIONS_BATCH_RUN_LEASE_SEC`) to avoid duplicate processing of the same batch by two workers.
 - For long tasks, batch mode supports scoped approval: `tg_create_add_member_batch` -> `tg_approve_batch` -> repeat `tg_run_add_member_batch` until complete.
 - Batch run permission is time-limited (`TG_ACTIONS_BATCH_APPROVAL_LEASE_SEC`, default 24h). After lease expiry, re-approve the same batch.
+- Conversational monitoring can use a time-bounded write lane: `tg_create_write_lane` -> human review -> `tg_approve_write_lane` -> `tg_send_message_with_lane` from an external heartbeat. Lane sends remain limited by the static allowlist, account identity, expiry, quotas, per-target interval, message length, link policy, idempotency, global rate limits and immediate revocation.
+- A write lane delegates text sends only. It never delegates files, forwards, edits, deletes, member actions, new targets, or scheduling. See [Time-bounded Write Lanes](docs/TIME_BOUNDED_WRITE_LANES.md).
 - ActionMCP is fail-closed by default: weakening core safe flags auto-disables actions unless `TG_ACTIONS_UNSAFE_OVERRIDE=1`.
 - If allowlist is required, ActionMCP also fails closed when `TG_ACTIONS_ALLOWED_GROUPS` is empty.
 - Direct `TelegramClient.send_*` writes and raw MTProto write requests (`client(Request)`) are blocked by default.

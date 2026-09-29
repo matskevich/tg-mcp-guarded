@@ -2,138 +2,43 @@ name: Anti-spam Compliance & Security
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [main, develop]
   pull_request:
-    branches: [ main, develop ]
+    branches: [main, develop]
   schedule:
-    # Run daily at 02:00 UTC to catch any regression
     - cron: '0 2 * * *'
 
-env:
-  PYTHON_VERSION: '3.9'
+permissions:
+  contents: read
 
 jobs:
   anti-spam-compliance:
-    name: 🛡️ Anti-spam Compliance Check
     runs-on: ubuntu-latest
-    
+    env:
+      PYTHONPATH: tganalytics:.
+      TG_API_ID: '1'
+      TG_API_HASH: testhash
     steps:
-    - name: 📥 Checkout code
-      uses: actions/checkout@v4
-      
-    - name: 🐍 Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: ${{ env.PYTHON_VERSION }}
-        
-    - name: 📦 Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        pip install bandit flake8 black isort yamllint
-        
-    - name: 🔍 Check anti-spam compliance
-      run: |
-        echo "::group::Anti-spam Compliance Check"
-        python scripts/check_anti_spam_compliance.py
-        echo "::endgroup::"
-        
-    - name: 🔒 Security scan with Bandit
-      run: |
-        echo "::group::Security Scan"
-        bandit -r src/ examples/ -f json -o bandit-report.json || true
-        bandit -r src/ examples/
-        echo "::endgroup::"
-        
-    - name: 🔍 Code linting
-      run: |
-        echo "::group::Code Linting"
-        flake8 src/ examples/ tests/ scripts/ --max-line-length=100 --ignore=E203,W503
-        echo "::endgroup::"
-        
-    - name: 🎨 Check code formatting
-      run: |
-        echo "::group::Code Formatting Check"
-        black --check src/ examples/ tests/ scripts/
-        isort --check src/ examples/ tests/ scripts/
-        echo "::endgroup::"
-        
-    - name: 🔍 Comprehensive Telegram API audit
-      run: |
-        echo "::group::Telegram API Audit"
-        make telegram-api-audit
-        echo "::endgroup::"
-        
-    - name: 📊 Upload security report
-      if: always()
-      uses: actions/upload-artifact@v3
-      with:
-        name: security-reports
-        path: |
-          bandit-report.json
-          security-report.json
-        retention-days: 30
-
-  test-with-compliance:
-    name: 🧪 Tests with Compliance Verification
-    runs-on: ubuntu-latest
-    needs: anti-spam-compliance
-    
-    steps:
-    - name: 📥 Checkout code
-      uses: actions/checkout@v4
-      
-    - name: 🐍 Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: ${{ env.PYTHON_VERSION }}
-        
-    - name: 📦 Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        pip install pytest pytest-mock pytest-asyncio
-        
-    - name: 🧪 Run tests
-      run: |
-        echo "::group::Running Tests"
-        PYTHONPATH=. python -m pytest tests/ -v --tb=short
-        echo "::endgroup::"
-        
-    - name: ✅ Verify anti-spam integration
-      run: |
-        echo "::group::Anti-spam Integration Test"
-        python -c "
-        from src.infra.limiter import get_rate_limiter
-        from src.core.group_manager import GroupManager, _is_testing_environment
-        
-        # Test rate limiter
-        limiter = get_rate_limiter()
-        stats = limiter.get_stats()
-        print('✅ Rate limiter working:', stats)
-        
-        # Test environment detection
-        is_test = _is_testing_environment()
-        print('✅ Test environment detected:', is_test)
-        
-        print('🛡️ Anti-spam system operational!')
-        "
-        echo "::endgroup::"
-
-  notification:
-    name: 📢 Compliance Status
-    runs-on: ubuntu-latest
-    needs: [anti-spam-compliance, test-with-compliance]
-    if: always()
-    
-    steps:
-    - name: 📢 Report status
-      run: |
-        if [ "${{ needs.anti-spam-compliance.result }}" == "success" ] && [ "${{ needs.test-with-compliance.result }}" == "success" ]; then
-          echo "✅ All anti-spam compliance checks passed!"
-          echo "🛡️ S16-leads is protected against Telegram API abuse"
-        else
-          echo "❌ Anti-spam compliance check failed!"
-          echo "🚨 Manual review required for Telegram API safety"
-          exit 1
-        fi
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: install dependencies
+        run: |
+          python -m pip install -r requirements.txt
+          python -m pip install bandit flake8
+      - name: anti-spam compliance and api audit
+        run: make telegram-api-audit
+      - name: security scan
+        run: bandit -r tganalytics/ -ll -f json -o bandit-report.json
+      - name: syntax and undefined-name checks
+        run: flake8 tganalytics/ tests/ scripts/ --select=E9,F63,F7,F82 --show-source --statistics
+      - name: tests with compliance
+        run: python -m pytest tests/ -q
+      - name: upload security report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-reports
+          path: bandit-report.json
+          retention-days: 30

@@ -5,7 +5,7 @@ This guide is for AI agents and operators who need to work with `tg-mcp` quickly
 ## 1. Mental Model
 
 - `tgmcp-read`: analytics and discovery only (`tg_get_*`, `tg_get_messages_since`, `tg_list_sessions`, `tg_resolve_username`, etc.).
-- `tgmcp-actions`: any Telegram write (`tg_send_message`, `tg_send_file`, `tg_delete_messages`, `tg_clear_history`, `tg_leave_dialog`, `tg_edit_message`, `tg_forward_messages`, add/remove/migrate member).
+- `tgmcp-actions`: any Telegram write (`tg_send_message`, `tg_send_file`, `tg_click_inline_button`, `tg_run_bot_steps`, `tg_delete_messages`, `tg_clear_history`, `tg_leave_dialog`, `tg_edit_message`, `tg_forward_messages`, add/remove/migrate member).
 - Direct Telethon write is blocked by default outside Action MCP.
 - Session bootstrap auth is allowed only in explicit mode (`TG_AUTH_BOOTSTRAP=1`).
 - For new installations, prefer `read` profile first (`scripts/render_mcp_config.py --profile read`).
@@ -49,6 +49,8 @@ Fallback when native ActionMCP tools are missing in the current thread:
 
 Use this when user wants one approval and then autonomous processing of many groups or destructive cleanup chunks.
 
+For stateful Telegram bot setup, prefer `tg_run_bot_steps` when the flow can be expressed as an explicit sequence of `send_message` / `click_button` / `wait` steps in one allowlisted bot dialog.
+
 1. Create one batch:
 - add member: `tg_create_add_member_batch(user, groups, note)`
 - delete cleanup: `tg_create_delete_messages_batch_from_manifest(manifest_path)`
@@ -62,7 +64,32 @@ Use this when user wants one approval and then autonomous processing of many gro
 5. If approval lease expired:
 - re-run `tg_approve_batch`, continue same batch
 
-## 5. Common Errors -> Agent Action
+## 5. Time-Bounded Conversational Write Lane
+
+Use this when a user approves autonomous follow-ups in a fixed set of chats for a
+limited time. Reads and scheduling remain separate: the heartbeat checks chats through
+`tgmcp-read`; the lane only authorizes constrained text sends through `tgmcp-actions`.
+
+1. Create an inert scope with `tg_create_write_lane(name, purpose, targets, ttl_sec,
+   max_messages, max_messages_per_target, min_interval_sec, max_message_len,
+   allow_links=false)`.
+2. Show the complete returned scope to the user. Ask for the exact confirmation phrase.
+3. Activate once with `tg_approve_write_lane(lane_id, confirmation_text,
+   approval_code)`.
+4. For each proposed reply, call `tg_send_message_with_lane(..., dry_run=true)` when
+   human inspection is useful, or `dry_run=false` when the active lane already covers it.
+5. Check `tg_get_write_lane(include_audit=true)` after activity. Revoke immediately with
+   `tg_revoke_write_lane` when the task ends or the observed conversation leaves scope.
+
+The `purpose` field is human-readable audit context. The server structurally enforces
+action type, target set, account, TTL, quotas, interval, length and link policy; it does
+not infer whether prose semantically matches the purpose. The monitoring agent must
+keep the approved conversational direction in its prompt.
+
+Lane authority is text-only and cannot be widened in place. Files, forwards, edits,
+deletes, member actions and new targets use the normal approval flows.
+
+## 6. Common Errors -> Agent Action
 
 - `Actions are disabled`: stop and ask operator to set `TG_ACTIONS_ENABLED=1`.
 - `allowed groups is empty`: ask operator to set `TG_ACTIONS_ALLOWED_GROUPS`.
@@ -73,7 +100,7 @@ Use this when user wants one approval and then autonomous processing of many gro
 - `batch is already running by another worker`: wait for run lease or retry later.
 - `Direct Telegram write 'SendCodeRequest' is blocked`: run session bootstrap helper (sets `TG_AUTH_BOOTSTRAP=1`) or set the flag only for auth flow.
 
-## 6. Auth Diagnostics
+## 7. Auth Diagnostics
 
 - Use `tg_auth_status` to verify `authorized=true/false` and current session identity.
 - `tg_auth_status` now also reports `session_path_status`; treat same-session read/actions warning as real risk, not noise.
@@ -82,7 +109,7 @@ Use this when user wants one approval and then autonomous processing of many gro
 - Login code usually comes via Telegram app (`SentCodeTypeApp`), not SMS.
 - If `.env` is restricted, use `TG_SECRET_PROVIDER=keychain|command` for `TG_API_ID/TG_API_HASH`.
 
-## 7. Multi-Project Usage
+## 8. Multi-Project Usage
 
 - Shared session is supported with `TG_SESSION_LOCK_MODE=shared`.
 - Shared RPS/circuit state is supported with common `data/anti_spam` and `TG_GLOBAL_RPS_MODE=shared`.
@@ -94,7 +121,7 @@ Use this when user wants one approval and then autonomous processing of many gro
 - configure `TG_READ_SESSION_PATH` and `TG_ACTIONS_SESSION_PATH` in both servers so runtime can detect same-session misconfig
 - run `python3 scripts/check_session_paths.py --config /path/to/.mcp.json` before enabling both servers
 
-## 8. Never Do This
+## 9. Never Do This
 
 - Never bypass MCP with direct Telethon writes from shell scripts.
 - Never disable allowlist/confirmation/approval/idempotency in production.

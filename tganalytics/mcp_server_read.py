@@ -6,7 +6,7 @@ import os
 
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(dotenv_path=os.environ.get("TG_ENV_FILE") or None)
 
 # Read profile should never perform direct writes.
 os.environ.setdefault("TG_BLOCK_DIRECT_TELETHON_WRITE", "1")
@@ -67,10 +67,22 @@ async def tg_search_participants(group: str, query: str, limit: int = 50) -> dic
 
 
 @mcp.tool()
-async def tg_get_messages(group: str, limit: int = 100, min_id: int = 0) -> dict:
+async def tg_get_messages(
+    group: str,
+    limit: int = 100,
+    min_id: int = 0,
+    max_id: int = 0,
+    offset_id: int = 0,
+) -> dict:
     """Get messages from a Telegram dialog target (group/channel/direct chat)."""
     manager = await ctx.get_manager()
-    messages = await manager.get_messages(group, limit=limit, min_id=min_id)
+    messages = await manager.get_messages(
+        group,
+        limit=limit,
+        min_id=min_id,
+        max_id=max_id,
+        offset_id=offset_id,
+    )
     return {"count": len(messages), "messages": messages}
 
 
@@ -82,6 +94,56 @@ async def tg_get_messages_since(group: str, cutoff_iso: str, limit: int = 0) -> 
         group, cutoff_iso=cutoff_iso, limit=limit
     )
     return {"count": len(messages), "messages": messages, "cutoff_iso": cutoff_iso}
+
+
+@mcp.tool()
+async def tg_search_messages(
+    group: str,
+    query: str,
+    limit: int = 100,
+    date_from: str = "",
+    date_to: str = "",
+) -> dict:
+    """Search messages in a Telegram dialog; read-only."""
+    manager = await ctx.get_manager()
+    messages = await manager.search_messages(
+        group,
+        query=query,
+        limit=limit,
+        date_from=date_from or None,
+        date_to=date_to or None,
+    )
+    return {
+        "count": len(messages),
+        "messages": messages,
+        "query": query,
+        "date_from": date_from or None,
+        "date_to": date_to or None,
+    }
+
+
+@mcp.tool()
+async def tg_search_global_messages(
+    query: str,
+    limit: int = 100,
+    date_from: str = "",
+    date_to: str = "",
+) -> dict:
+    """Search messages across Telegram dialogs; read-only."""
+    manager = await ctx.get_manager()
+    messages = await manager.search_global_messages(
+        query=query,
+        limit=limit,
+        date_from=date_from or None,
+        date_to=date_to or None,
+    )
+    return {
+        "count": len(messages),
+        "messages": messages,
+        "query": query,
+        "date_from": date_from or None,
+        "date_to": date_to or None,
+    }
 
 
 @mcp.tool()
@@ -135,6 +197,150 @@ async def tg_get_user_by_id(user_id: int) -> dict:
             "is_bot": getattr(entity, "bot", False),
             "is_premium": getattr(entity, "premium", False),
         }
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+@mcp.tool()
+async def tg_search_contacts(query: str, limit: int = 50) -> dict:
+    """Search Telegram contacts/global contacts by query without mutating contacts."""
+    await ctx.get_manager()
+    clean_query = str(query or "").strip()
+    if not clean_query:
+        return {"error": "query is empty"}
+    clean_limit = max(1, min(int(limit or 50), 200))
+
+    try:
+        from telethon.tl.functions.contacts import SearchRequest
+
+        result = await safe_call(
+            ctx.client,
+            SearchRequest(q=clean_query, limit=clean_limit),
+            operation_type="api",
+        )
+        users = {getattr(user, "id", None): user for user in (getattr(result, "users", None) or [])}
+        chats = {getattr(chat, "id", None): chat for chat in (getattr(result, "chats", None) or [])}
+
+        def peer_id(peer):
+            return (
+                getattr(peer, "user_id", None)
+                or getattr(peer, "chat_id", None)
+                or getattr(peer, "channel_id", None)
+            )
+
+        def peer_type(peer) -> str:
+            name = type(peer).__name__.lower()
+            if "user" in name:
+                return "user"
+            if "channel" in name:
+                return "channel"
+            if "chat" in name:
+                return "chat"
+            return name
+
+        def serialize_peer(peer, bucket: str) -> dict:
+            pid = peer_id(peer)
+            ptype = peer_type(peer)
+            entity = users.get(pid) if ptype == "user" else chats.get(pid)
+            return {
+                "id": pid,
+                "type": ptype,
+                "bucket": bucket,
+                "title": (
+                    " ".join(
+                        str(part or "").strip()
+                        for part in [
+                            getattr(entity, "first_name", None),
+                            getattr(entity, "last_name", None),
+                        ]
+                        if str(part or "").strip()
+                    )
+                    if ptype == "user"
+                    else getattr(entity, "title", None)
+                ),
+                "username": getattr(entity, "username", None),
+                "phone": getattr(entity, "phone", None) if ptype == "user" else None,
+                "is_bot": getattr(entity, "bot", False) if ptype == "user" else False,
+            }
+
+        entries = []
+        for bucket in ("my_results", "results"):
+            for peer in getattr(result, bucket, None) or []:
+                entries.append(serialize_peer(peer, bucket))
+        return {"query": clean_query, "count": len(entries), "results": entries}
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+@mcp.tool()
+async def tg_get_contacts(limit: int = 5000) -> dict:
+    """List Telegram account contacts with visible phone fields; read-only."""
+    await ctx.get_manager()
+    clean_limit = max(1, min(int(limit or 5000), 10000))
+    try:
+        from telethon.tl.functions.contacts import GetContactsRequest
+
+        result = await safe_call(
+            ctx.client,
+            GetContactsRequest(hash=0),
+            operation_type="api",
+        )
+        contacts = []
+        for user in (getattr(result, "users", None) or [])[:clean_limit]:
+            contacts.append(
+                {
+                    "id": getattr(user, "id", None),
+                    "title": " ".join(
+                        str(part or "").strip()
+                        for part in [
+                            getattr(user, "first_name", None),
+                            getattr(user, "last_name", None),
+                        ]
+                        if str(part or "").strip()
+                    )
+                    or getattr(user, "username", None),
+                    "username": getattr(user, "username", None),
+                    "phone": getattr(user, "phone", None),
+                    "is_bot": getattr(user, "bot", False),
+                    "is_premium": getattr(user, "premium", False),
+                }
+            )
+        return {"count": len(contacts), "contacts": contacts}
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+@mcp.tool()
+async def tg_get_saved_contacts(limit: int = 5000) -> dict:
+    """List saved/imported phone contacts; read-only."""
+    await ctx.get_manager()
+    clean_limit = max(1, min(int(limit or 5000), 10000))
+    try:
+        from telethon.tl.functions.contacts import GetSavedRequest
+
+        result = await safe_call(
+            ctx.client,
+            GetSavedRequest(),
+            operation_type="api",
+        )
+        raw_contacts = result if isinstance(result, list) else (
+            getattr(result, "contacts", None)
+            or getattr(result, "saved", None)
+            or []
+        )
+        contacts = []
+        for item in raw_contacts[:clean_limit]:
+            date = getattr(item, "date", None)
+            contacts.append(
+                {
+                    "phone": getattr(item, "phone", None),
+                    "first_name": getattr(item, "first_name", None),
+                    "last_name": getattr(item, "last_name", None),
+                    "date": date.isoformat() if hasattr(date, "isoformat") else date,
+                    "type": type(item).__name__,
+                }
+            )
+        return {"count": len(contacts), "contacts": contacts}
     except Exception as exc:
         return {"error": str(exc)}
 

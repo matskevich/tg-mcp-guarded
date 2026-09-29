@@ -47,3 +47,12 @@ logs/
 # Temporary files
 tmp/
 temp/
+
+# local state and patch recovery artifacts
+data/
+*.orig
+*.rej
+*.bak
+.mcp.local.json
+security-report.json
+bandit-report.json
