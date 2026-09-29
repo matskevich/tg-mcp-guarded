@@ -27,6 +27,9 @@ class _FakeManager:
     async def send_message(self, group, message_text):
         return True
 
+    async def pin_message(self, group, message_id, notify=False):
+        return True
+
     async def delete_messages(self, group, message_ids, revoke=True, dry_run=False):
         return {
             "success": True,
@@ -99,10 +102,10 @@ class _FakeManager:
             "action": "set_channel_comments_join_requirement",
             "dry_run": dry_run,
             "join_required": join_required,
-            "channel_target": "@Matskevich",
-            "linked_group_target": "@matskevich_chat",
-            "linked_group_id": 5023804528,
-            "linked_group_title": "Matskevich comments",
+            "channel_target": "@example_channel",
+            "linked_group_target": "@example_discussion",
+            "linked_group_id": 1234567890,
+            "linked_group_title": "example comments",
             "current_join_required": True if dry_run else join_required,
         }
 
@@ -255,6 +258,43 @@ async def test_send_message_requires_one_time_approval_code(monkeypatch, tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_pin_message_runs_dry_run_then_confirm(monkeypatch, tmp_path):
+    monkeypatch.setattr(actions, "SAFE_STARTUP_BLOCK_REASON", None)
+    monkeypatch.setattr(actions, "ACTIONS_ENABLED", True)
+    monkeypatch.setattr(actions, "REQUIRE_ALLOWLIST", True)
+    monkeypatch.setattr(actions, "ALLOWED_TARGETS", {"test_target"})
+    monkeypatch.setattr(actions, "REQUIRE_CONFIRMATION_TEXT", True)
+    monkeypatch.setattr(actions, "CONFIRMATION_PHRASE", "confirm-test-action")
+    monkeypatch.setattr(actions, "REQUIRE_APPROVAL_CODE", True)
+    monkeypatch.setattr(actions, "IDEMPOTENCY_ENABLED", False)
+    monkeypatch.setattr(actions, "APPROVAL_TTL_SEC", 1800)
+    monkeypatch.setattr(actions, "APPROVAL_MIN_AGE_SEC", 0)
+    monkeypatch.setattr(actions, "APPROVAL_FILE", tmp_path / "approvals.json")
+    monkeypatch.setattr(actions, "ctx", _FakeCtx())
+
+    preview = await actions.tg_pin_message(
+        group="test_target",
+        message_id=868,
+        dry_run=True,
+    )
+    assert preview["success"] is True
+    approval_code = preview.get("approval_code")
+    assert approval_code
+
+    pinned = await actions.tg_pin_message(
+        group="test_target",
+        message_id=868,
+        dry_run=False,
+        confirm=True,
+        confirmation_text="confirm-test-action",
+        approval_code=approval_code,
+    )
+    assert pinned["success"] is True
+    assert pinned["message_id"] == 868
+    assert pinned["notify"] is False
+
+
+@pytest.mark.asyncio
 async def test_send_message_blocks_immediate_execute_after_dry_run(
     monkeypatch, tmp_path
 ):
@@ -324,13 +364,13 @@ async def test_set_channel_comments_join_requirement_requires_allowlisted_linked
     monkeypatch.setattr(actions, "ctx", _FakeCtx())
 
     result = await actions.tg_set_channel_comments_join_requirement(
-        channel="@Matskevich",
+        channel="@example_channel",
         join_required=False,
         dry_run=True,
     )
 
     assert result["success"] is False
-    assert result["linked_group_target"] == "@matskevich_chat"
+    assert result["linked_group_target"] == "@example_discussion"
     assert "not in TG_ACTIONS_ALLOWED_GROUPS" in result["error"]
 
 
@@ -341,7 +381,7 @@ async def test_set_channel_comments_join_requirement_executes_after_dry_run(
     monkeypatch.setattr(actions, "SAFE_STARTUP_BLOCK_REASON", None)
     monkeypatch.setattr(actions, "ACTIONS_ENABLED", True)
     monkeypatch.setattr(actions, "REQUIRE_ALLOWLIST", True)
-    monkeypatch.setattr(actions, "ALLOWED_TARGETS", {"matskevich_chat"})
+    monkeypatch.setattr(actions, "ALLOWED_TARGETS", {"example_discussion"})
     monkeypatch.setattr(actions, "REQUIRE_CONFIRMATION_TEXT", True)
     monkeypatch.setattr(actions, "CONFIRMATION_PHRASE", "confirm-test-action")
     monkeypatch.setattr(actions, "REQUIRE_APPROVAL_CODE", True)
@@ -352,7 +392,7 @@ async def test_set_channel_comments_join_requirement_executes_after_dry_run(
     monkeypatch.setattr(actions, "ctx", _FakeCtx())
 
     preview = await actions.tg_set_channel_comments_join_requirement(
-        channel="@Matskevich",
+        channel="@example_channel",
         join_required=False,
         dry_run=True,
     )
@@ -361,7 +401,7 @@ async def test_set_channel_comments_join_requirement_executes_after_dry_run(
     assert approval_code
 
     executed = await actions.tg_set_channel_comments_join_requirement(
-        channel="@Matskevich",
+        channel="@example_channel",
         join_required=False,
         dry_run=False,
         confirm=True,
@@ -371,7 +411,7 @@ async def test_set_channel_comments_join_requirement_executes_after_dry_run(
 
     assert executed["success"] is True
     assert executed["join_required"] is False
-    assert executed["linked_group_target"] == "@matskevich_chat"
+    assert executed["linked_group_target"] == "@example_discussion"
 
 
 @pytest.mark.asyncio

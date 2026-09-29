@@ -117,7 +117,7 @@ anti-spam-check:
 security-check:
 	@echo "Running comprehensive security checks..."
 	@echo "=== Bandit Security Scan ==="
-	bandit -r tganalytics/ -f json -o security-report.json 2>/dev/null || bandit -r tganalytics/
+	bandit -r tganalytics/ -ll -f json -o security-report.json
 	@echo "=== Anti-spam Compliance ==="
 	python scripts/check_anti_spam_compliance.py
 

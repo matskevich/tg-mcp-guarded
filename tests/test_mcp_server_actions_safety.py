@@ -52,6 +52,73 @@ def test_hash_payload_is_stable_for_key_order():
     assert a == b
 
 
+def test_select_button_requires_selector_for_multiple_buttons():
+    options = [
+        {"row": 0, "col": 0, "text": "one"},
+        {"row": 0, "col": 1, "text": "two"},
+    ]
+
+    selected, error = actions._select_button_option(
+        options,
+        button_text="",
+        row=-1,
+        col=-1,
+        button_data_b64="",
+        exact_text=True,
+    )
+
+    assert selected is None
+    assert "selector required" in str(error)
+
+
+def test_select_button_by_exact_text():
+    options = [
+        {"row": 0, "col": 0, "text": "Назад"},
+        {"row": 0, "col": 1, "text": "Добавить"},
+    ]
+
+    selected, error = actions._select_button_option(
+        options,
+        button_text="Добавить",
+        row=-1,
+        col=-1,
+        button_data_b64="",
+        exact_text=True,
+    )
+
+    assert error is None
+    assert selected == options[1]
+
+
+def test_normalize_bot_steps_accepts_send_click_wait():
+    steps, error = actions._normalize_bot_steps(
+        [
+            {"type": "send", "text": "Москва"},
+            {"type": "click", "button_text": "Москва", "exact_text": False},
+            {"type": "wait", "wait_after_sec": 0.5},
+        ]
+    )
+
+    assert error is None
+    assert [step["type"] for step in steps] == [
+        "send_message",
+        "click_button",
+        "wait",
+    ]
+    assert steps[1]["button_text"] == "Москва"
+
+
+def test_normalize_bot_steps_rejects_too_many_steps(monkeypatch):
+    monkeypatch.setattr(actions, "MAX_BOT_STEPS", 1)
+
+    steps, error = actions._normalize_bot_steps(
+        [{"type": "send", "text": "one"}, {"type": "send", "text": "two"}]
+    )
+
+    assert steps == []
+    assert "too many" in str(error)
+
+
 def test_preconditions_blocked_by_safe_startup_guard(monkeypatch):
     monkeypatch.setattr(actions, "SAFE_STARTUP_BLOCK_REASON", "unsafe config")
     ok, err = actions._check_action_preconditions("group1", dry_run=True, confirm=False)

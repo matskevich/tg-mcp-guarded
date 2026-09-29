@@ -1,3 +1,4 @@
+from .bot_workflow import message_button_options, public_button_options
 import logging
 import os
 from datetime import datetime
@@ -124,6 +125,11 @@ class GroupManager:
             or getattr(entity, "username", None)
             or str(getattr(entity, "id", ""))
         )
+
+    @staticmethod
+    def _message_buttons_to_records(msg) -> List[Dict[str, Any]]:
+        """Serialize visible Telegram bot buttons without executing them."""
+        return public_button_options(message_button_options(msg))
 
     async def _resolve_read_entity(
         self,
@@ -581,6 +587,8 @@ class GroupManager:
         group_identifier: Union[str, int],
         limit: Optional[int] = None,
         min_id: int = 0,
+        max_id: int = 0,
+        offset_id: int = 0,
     ) -> List[Dict[str, Any]]:
         """
         Получает сообщения группы с антиспам защитой
@@ -589,6 +597,8 @@ class GroupManager:
             group_identifier: username группы (без @) или ID группы
             limit: Максимальное количество сообщений (None = все)
             min_id: Минимальный ID сообщения (для продолжения выгрузки)
+            max_id: Максимальный ID сообщения (для выгрузки более старых сообщений)
+            offset_id: ID сообщения, от которого выгружать более старые сообщения
 
         Returns:
             Список словарей с информацией о сообщениях
@@ -603,80 +613,27 @@ class GroupManager:
             async def fetch_messages_safe():
                 messages = []
                 count = 0
+                effective_offset_id = offset_id or max_id
+                effective_max_id = max_id if offset_id else 0
+                iter_kwargs = {
+                    "limit": limit,
+                    "min_id": min_id,
+                    "reverse": False,
+                }
+                if effective_max_id:
+                    iter_kwargs["max_id"] = effective_max_id
+                if effective_offset_id:
+                    iter_kwargs["offset_id"] = effective_offset_id
 
                 async for msg in self.client.iter_messages(
                     entity,
-                    limit=limit,
-                    min_id=min_id,
-                    reverse=False,  # От старых к новым
+                    **iter_kwargs,
                 ):
                     # Пропускаем служебные сообщения
                     if not msg.message and not msg.media:
                         continue
 
-                    # Extract fwd_from info
-                    fwd_from = None
-                    if msg.fwd_from:
-                        fwd = msg.fwd_from
-                        fwd_from = {
-                            "from_id": None,
-                            "from_type": None,
-                            "from_name": fwd.from_name,
-                            "from_username": None,
-                            "from_first_name": None,
-                            "from_last_name": None,
-                            "date": fwd.date.isoformat() if fwd.date else None,
-                            "channel_post": fwd.channel_post,
-                        }
-                        if fwd.from_id:
-                            from telethon.tl.types import (
-                                PeerChannel,
-                                PeerChat,
-                                PeerUser,
-                            )
-
-                            if isinstance(fwd.from_id, PeerUser):
-                                fwd_from["from_id"] = fwd.from_id.user_id
-                                fwd_from["from_type"] = "user"
-                            elif isinstance(fwd.from_id, PeerChannel):
-                                fwd_from["from_id"] = fwd.from_id.channel_id
-                                fwd_from["from_type"] = "channel"
-                            elif isinstance(fwd.from_id, PeerChat):
-                                fwd_from["from_id"] = fwd.from_id.chat_id
-                                fwd_from["from_type"] = "chat"
-                        # Resolve name/username from cached entities (no extra API calls)
-                        # msg.forward.sender/.chat are populated from the iter_messages response
-                        if msg.forward:
-                            fwd_entity = msg.forward.sender or msg.forward.chat
-                            if fwd_entity:
-                                fwd_from["from_username"] = getattr(
-                                    fwd_entity, "username", None
-                                )
-                                fwd_from["from_first_name"] = getattr(
-                                    fwd_entity, "first_name", None
-                                )
-                                fwd_from["from_last_name"] = getattr(
-                                    fwd_entity, "last_name", None
-                                )
-
-                    message_data = {
-                        "id": msg.id,
-                        "date": msg.date.isoformat() if msg.date else None,
-                        "from_id": msg.from_id.user_id if msg.from_id else None,
-                        "text": msg.message or "",
-                        "fwd_from": fwd_from,
-                        "is_reply": msg.reply_to is not None,
-                        "reply_to_msg_id": (
-                            msg.reply_to.reply_to_msg_id if msg.reply_to else None
-                        ),
-                        "views": getattr(msg, "views", None),
-                        "forwards": getattr(msg, "forwards", None),
-                        "is_pinned": getattr(msg, "is_pinned", False),
-                        "has_media": msg.media is not None,
-                        "media_type": type(msg.media).__name__ if msg.media else None,
-                    }
-
-                    messages.append(message_data)
+                    messages.append(self._message_to_record(msg))
                     count += 1
 
                     # Smart pause каждые 1000 сообщений
@@ -764,7 +721,9 @@ class GroupManager:
         record = {
             "id": msg.id,
             "date": msg.date.isoformat() if msg.date else None,
-            "from_id": msg.from_id.user_id if msg.from_id else None,
+            "from_id": (
+                getattr(msg, "sender_id", None) or getattr(msg.from_id, "user_id", None)
+            ),
             "text": msg.message or "",
             "caption": msg.message or "",
             "fwd_from": fwd_from,
@@ -772,9 +731,11 @@ class GroupManager:
             "reply_to_msg_id": msg.reply_to.reply_to_msg_id if msg.reply_to else None,
             "views": getattr(msg, "views", None),
             "forwards": getattr(msg, "forwards", None),
-            "is_pinned": getattr(msg, "is_pinned", False),
+            "is_pinned": bool(getattr(msg, "pinned", False)),
             "has_media": msg.media is not None,
             "media_type": type(msg.media).__name__ if msg.media else None,
+            "has_buttons": bool(getattr(msg, "buttons", None)),
+            "buttons": cls._message_buttons_to_records(msg),
         }
         record.update(cls._media_metadata(msg))
         return record
@@ -832,6 +793,152 @@ class GroupManager:
             logger.error(
                 f"Ошибка при получении сообщений since для {group_identifier}: {e}"
             )
+            return []
+
+    async def search_messages(
+        self,
+        group_identifier: Union[str, int],
+        query: str,
+        limit: int = 100,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Search messages in a dialog using Telegram server-side search."""
+        try:
+            entity = await self._resolve_read_entity(group_identifier, allow_users=True)
+            if not entity:
+                logger.error(f"Не удалось найти группу: {group_identifier}")
+                return []
+
+            clean_query = str(query or "").strip()
+            if not clean_query:
+                raise ValueError("query must not be empty")
+            normalized_limit = max(1, min(int(limit or 100), 1000))
+            from_dt = self._parse_cutoff_datetime(date_from) if date_from else None
+            to_dt = self._parse_cutoff_datetime(date_to) if date_to else None
+
+            async def search_messages_safe():
+                messages = []
+                iter_kwargs = {
+                    "search": clean_query,
+                    "limit": normalized_limit,
+                    "reverse": False,
+                }
+                if to_dt:
+                    iter_kwargs["offset_date"] = to_dt
+                async for msg in self.client.iter_messages(
+                    entity,
+                    **iter_kwargs,
+                ):
+                    msg_dt = msg.date.replace(tzinfo=None) if msg.date else None
+                    if from_dt and msg_dt and msg_dt < from_dt:
+                        break
+                    if to_dt and msg_dt and msg_dt > to_dt:
+                        continue
+                    if not msg.message and not msg.media:
+                        continue
+                    messages.append(self._message_to_record(msg))
+                return messages
+
+            messages = await _safe_api_call(search_messages_safe)
+            logger.info(
+                f"Найдено {len(messages)} сообщений в {group_identifier} по запросу"
+            )
+            return messages
+        except Exception as e:
+            logger.error(f"Ошибка при поиске сообщений {group_identifier}: {e}")
+            return []
+
+    @staticmethod
+    def _dialog_type_from_entity(entity: Union[Channel, Chat, User, None]) -> str:
+        if isinstance(entity, User):
+            return "user"
+        if isinstance(entity, Chat):
+            return "group"
+        if isinstance(entity, Channel):
+            return "group" if getattr(entity, "megagroup", False) else "channel"
+        return "unknown"
+
+    @staticmethod
+    def _action_target_from_entity(
+        entity: Union[Channel, Chat, User, None],
+        chat_id: Any,
+    ) -> str:
+        username = getattr(entity, "username", None) if entity else None
+        if username:
+            return f"@{username}"
+        return str(chat_id or getattr(entity, "id", ""))
+
+    async def _message_to_record_with_dialog(self, msg) -> Dict[str, Any]:
+        record = self._message_to_record(msg)
+        chat_id = getattr(msg, "chat_id", None)
+        entity = getattr(msg, "chat", None)
+        if entity is None and getattr(msg, "peer_id", None) is not None:
+            try:
+                entity = await _safe_api_call(self.client.get_entity, msg.peer_id)
+            except Exception as exc:
+                logger.debug(f"Не удалось разрешить entity global search: {exc}")
+                entity = None
+
+        dialog_type = self._dialog_type_from_entity(entity)
+        participants_count = (
+            getattr(entity, "participants_count", None) if entity else None
+        )
+        record.update(
+            {
+                "chat_id": chat_id or getattr(entity, "id", None),
+                "action_target": self._action_target_from_entity(entity, chat_id),
+                "target_label": (
+                    self._dialog_title(entity) if entity else str(chat_id or "")
+                ),
+                "dialog_type": dialog_type,
+                "participants_count": participants_count,
+                "chat_username": getattr(entity, "username", None) if entity else None,
+            }
+        )
+        return record
+
+    async def search_global_messages(
+        self,
+        query: str,
+        limit: int = 100,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Search messages across dialogs using Telegram server-side search."""
+        try:
+            clean_query = str(query or "").strip()
+            if not clean_query:
+                raise ValueError("query must not be empty")
+            normalized_limit = max(1, min(int(limit or 100), 1000))
+            from_dt = self._parse_cutoff_datetime(date_from) if date_from else None
+            to_dt = self._parse_cutoff_datetime(date_to) if date_to else None
+
+            async def search_global_safe():
+                messages = []
+                iter_kwargs = {
+                    "search": clean_query,
+                    "limit": normalized_limit,
+                    "reverse": False,
+                }
+                if to_dt:
+                    iter_kwargs["offset_date"] = to_dt
+                async for msg in self.client.iter_messages(None, **iter_kwargs):
+                    msg_dt = msg.date.replace(tzinfo=None) if msg.date else None
+                    if from_dt and msg_dt and msg_dt < from_dt:
+                        break
+                    if to_dt and msg_dt and msg_dt > to_dt:
+                        continue
+                    if not msg.message and not msg.media:
+                        continue
+                    messages.append(await self._message_to_record_with_dialog(msg))
+                return messages
+
+            messages = await _safe_api_call(search_global_safe)
+            logger.info("Найдено %s сообщений global search", len(messages))
+            return messages
+        except Exception as e:
+            logger.error(f"Ошибка при global search сообщений: {e}")
             return []
 
     async def get_my_dialogs(
@@ -973,12 +1080,25 @@ class GroupManager:
                 return None
 
             async def do_download():
-                msgs = await self.client.get_messages(entity, ids=message_id)
-                if not msgs or not msgs.media:
+                msg = await self.client.get_messages(entity, ids=message_id)
+
+                # Telegram DM history can expose a message through iter_messages
+                # while an ids= lookup returns None. Fall back to a bounded peer
+                # scan so tg_download_media remains consistent with tg_get_messages.
+                if not msg or not getattr(msg, "media", None):
+                    async for candidate in self.client.iter_messages(
+                        entity,
+                        limit=500,
+                    ):
+                        if getattr(candidate, "id", None) == message_id:
+                            msg = candidate
+                            break
+
+                if not msg or not getattr(msg, "media", None):
                     logger.error(f"Message {message_id} has no media")
                     return None
                 os.makedirs(output_dir, exist_ok=True)
-                return await self.client.download_media(msgs.media, output_dir)
+                return await self.client.download_media(msg, output_dir)
 
             path = await _safe_api_call(do_download)
             if path:
@@ -1599,6 +1719,37 @@ class GroupManager:
             )
             return False
 
+    async def pin_message(
+        self,
+        group_identifier: Union[str, int],
+        message_id: int,
+        notify: bool = False,
+    ) -> bool:
+        """Закрепляет конкретное сообщение в группе/канале."""
+        try:
+            entity = await self._resolve_target_entity(group_identifier)
+            await _safe_api_call(
+                self.client.pin_message,
+                entity,
+                int(message_id),
+                notify=bool(notify),
+                operation_type="group_msg",
+            )
+            logger.info(
+                "Сообщение %s закреплено в группе %s",
+                message_id,
+                group_identifier,
+            )
+            return True
+        except Exception as e:
+            logger.error(
+                "Ошибка при закреплении сообщения %s в группе %s: %s",
+                message_id,
+                group_identifier,
+                e,
+            )
+            return False
+
     async def send_file(
         self, group_identifier: Union[str, int], file_path: str, caption: str = ""
     ) -> bool:
@@ -1688,20 +1839,33 @@ class GroupManager:
             if dry_run:
                 return result
 
-            from telethon.tl.functions.messages import DeleteHistoryRequest
+            if isinstance(entity, Channel):
+                from telethon.tl.functions.channels import DeleteHistoryRequest
 
-            await _safe_api_call(
-                self.client,
-                DeleteHistoryRequest(
-                    peer=entity,
-                    max_id=normalized_max_id,
-                    revoke=bool(revoke),
-                    just_clear=bool(just_clear),
-                    min_date=None,
-                    max_date=None,
-                ),
-                operation_type="api",
-            )
+                await _safe_api_call(
+                    self.client,
+                    DeleteHistoryRequest(
+                        channel=entity,
+                        max_id=normalized_max_id,
+                        for_everyone=bool(revoke),
+                    ),
+                    operation_type="api",
+                )
+            else:
+                from telethon.tl.functions.messages import DeleteHistoryRequest
+
+                await _safe_api_call(
+                    self.client,
+                    DeleteHistoryRequest(
+                        peer=entity,
+                        max_id=normalized_max_id,
+                        revoke=bool(revoke),
+                        just_clear=bool(just_clear),
+                        min_date=None,
+                        max_date=None,
+                    ),
+                    operation_type="api",
+                )
             return result
         except Exception as e:
             logger.error(f"Ошибка при очистке истории {group_identifier}: {e}")

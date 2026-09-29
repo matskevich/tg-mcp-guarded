@@ -126,8 +126,13 @@ total_wait = wait_time + (base_wait * (2 ** (retry_count - 1)))
 - повтор по тем же параметрам возможен только с `force_resend=true`.
 - для batch-задач approval не вечный: лизинг запуска ограничен `TG_ACTIONS_BATCH_APPROVAL_LEASE_SEC` (по умолчанию 24h), потом требуется re-approve.
 - запуск одного и того же batch защищён run-lease (`TG_ACTIONS_BATCH_RUN_LEASE_SEC`), чтобы 2 worker-процесса не исполняли его одновременно.
+- time-bounded write lane даёт один раз одобренное право только на `send_message` в явные allowlisted-чаты; scope включает TTL, общий и per-target лимит, минимальный интервал, длину сообщения и link policy.
+- lane привязан к Telegram account ID в момент approval; смена active session блокирует отправку.
+- lane нельзя расширить после preview: scope hash связывает approval с точным набором целей и ограничений. Расширение требует новой lane и нового approval.
+- revoke сразу блокирует новые acquisition. Уже начатый Telegram request может завершиться; его результат сохраняется в metadata audit.
+- `purpose` служит audit-контекстом и не является semantic content filter. Смысловую границу держит prompt внешнего monitor-agent; структурные ограничения enforce-ит сервер.
 - fail-closed startup: если ослабить базовые safety-флаги (`allowlist/confirm/approval/idempotency/write-guard`), ActionMCP автоматически блокирует write (если не задан `TG_ACTIONS_UNSAFE_OVERRIDE=1`).
-- state файлы ActionMCP (`action_approvals.json`, `action_idempotency.json`, `action_batches.json`) обновляются через file-lock + atomic replace, чтобы параллельные процессы не портили состояние.
+- state файлы ActionMCP (`action_approvals.json`, `action_idempotency.json`, `action_batches.json`, `action_lanes.json`) обновляются через file-lock + atomic replace, чтобы параллельные процессы не портили состояние.
 
 ## Enforcement: как это проверяется
 

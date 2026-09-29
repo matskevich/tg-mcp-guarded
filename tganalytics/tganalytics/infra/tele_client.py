@@ -14,6 +14,7 @@ from telethon import TelegramClient
 from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError
 from dotenv import load_dotenv
 from telethon.tl.types import User
+from .paths import resolve_state_path
 from .limiter import safe_call, get_rate_limiter
 from .metrics import (
     increment_rate_limit_requests_total,
@@ -22,7 +23,7 @@ from .metrics import (
     observe_tele_call_latency_seconds,
 )
 
-load_dotenv()
+load_dotenv(dotenv_path=os.environ.get("TG_ENV_FILE") or None)
 
 try:
     import fcntl
@@ -30,8 +31,8 @@ except Exception:  # pragma: no cover
     fcntl = None
 
 # Безопасные пути для хранения данных (настраиваемые)
-# Можно переопределить через SESSION_DIR, по умолчанию в data/sessions
-SESSION_DIR = Path(os.getenv("SESSION_DIR", "data/sessions"))
+# Можно переопределить через SESSION_DIR, по умолчанию в <repo>/data/sessions
+SESSION_DIR = resolve_state_path(os.getenv("SESSION_DIR", ""), "sessions")
 SESSION_DIR.mkdir(parents=True, exist_ok=True)
 SESSION_LOCK_MODE = os.getenv("TG_SESSION_LOCK_MODE", "shared").strip().lower()
 RECEIVE_UPDATES = os.getenv("TG_RECEIVE_UPDATES", "0") == "1"
@@ -44,7 +45,9 @@ ACTION_PROCESS_MARKER = os.getenv("TG_ACTION_PROCESS", "0") == "1"
 WRITE_CONTEXT = os.getenv("TG_WRITE_CONTEXT", "").strip().lower()
 WRITE_ALLOWED_CONTEXTS = {
     item.strip().lower()
-    for item in os.getenv("TG_DIRECT_TELETHON_WRITE_ALLOWED_CONTEXTS", "actions_mcp").split(",")
+    for item in os.getenv(
+        "TG_DIRECT_TELETHON_WRITE_ALLOWED_CONTEXTS", "actions_mcp"
+    ).split(",")
     if item.strip()
 }
 SESSION_RUNTIME_MODE = os.getenv("TG_SESSION_RUNTIME_MODE", "direct").strip().lower()
@@ -105,6 +108,23 @@ WRITE_REQUEST_PREFIXES = (
     "Unban",
 )
 
+WRITE_REQUEST_NAMES = {
+    # This request is named "Get..." in MTProto, but clicking a bot callback
+    # button mutates bot-side conversation state and must stay ActionMCP-only.
+    "GetBotCallbackAnswerRequest",
+    "ToggleJoinToSendRequest",
+}
+
+# Telethon uses these exact auth RPCs internally when a read-only media
+# download is served from another Telegram data centre. Their names start
+# with Export/Import, but they move the current session between DCs; they do
+# not publish, edit, delete, forward, join, or otherwise mutate chat state.
+# Keep the exception exact so other Export*/Import* requests remain guarded.
+READ_TRANSPORT_REQUEST_NAMES = {
+    "ExportAuthorizationRequest",
+    "ImportAuthorizationRequest",
+}
+
 # Explicit auth bootstrap allowlist. Enabled only with TG_AUTH_BOOTSTRAP=1.
 # This unlocks Telegram login flows without enabling general write operations.
 AUTH_BOOTSTRAP_ALLOWED_REQUESTS = {
@@ -117,6 +137,7 @@ AUTH_BOOTSTRAP_ALLOWED_REQUESTS = {
     "ImportLoginTokenRequest",
     "AcceptLoginTokenRequest",
 }
+
 
 # Усиление прав доступа для каталога/файлов сессии
 def _harden_session_storage(directory: Path, session_file: Path) -> None:
@@ -135,6 +156,7 @@ def _harden_session_storage(directory: Path, session_file: Path) -> None:
                 session_file.chmod(0o600)
     except Exception:
         pass
+
 
 def _read_secret_from_command(env_var: str) -> str:
     cmd = os.getenv(env_var, "").strip()
@@ -240,9 +262,11 @@ def _runtime_safe_component(value: str) -> str:
 
 def _runtime_session_file(source_session_file: Path) -> Path:
     source = _normalize_session_file_path(source_session_file).expanduser().resolve()
-    digest = hashlib.sha1(str(source).encode("utf-8")).hexdigest()[:10]
+    digest = hashlib.sha1(str(source).encode("utf-8"), usedforsecurity=False).hexdigest()[:10]
     stem = _runtime_safe_component(source.stem)
-    return (SESSION_RUNTIME_DIR / f"{stem}__{digest}__pid{os.getpid()}.session").resolve()
+    return (
+        SESSION_RUNTIME_DIR / f"{stem}__{digest}__pid{os.getpid()}.session"
+    ).resolve()
 
 
 def describe_session_target(session_file: str | Path) -> dict[str, str]:
@@ -267,8 +291,13 @@ def _copy_session_sidecars(source: Path, target: Path) -> None:
             shutil.copy2(source_companion, target_companion)
 
 
-def _prepare_runtime_session_copy(source_session_file: Path, effective_session_file: Path) -> None:
-    if source_session_file == effective_session_file or not source_session_file.exists():
+def _prepare_runtime_session_copy(
+    source_session_file: Path, effective_session_file: Path
+) -> None:
+    if (
+        source_session_file == effective_session_file
+        or not source_session_file.exists()
+    ):
         return
 
     SESSION_RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
@@ -287,7 +316,9 @@ def _prepare_runtime_session_copy(source_session_file: Path, effective_session_f
             uri=True,
             timeout=30,
         ) as source_conn:
-            with sqlite3.connect(str(effective_session_file), timeout=30) as target_conn:
+            with sqlite3.connect(
+                str(effective_session_file), timeout=30
+            ) as target_conn:
                 source_conn.backup(target_conn)
                 target_conn.commit()
     except Exception:
@@ -348,6 +379,10 @@ def _is_telethon_write_request(request: object) -> bool:
     name = getattr(request_cls, "__name__", "")
     if AUTH_BOOTSTRAP_ENABLED and name in AUTH_BOOTSTRAP_ALLOWED_REQUESTS:
         return False
+    if name in READ_TRANSPORT_REQUEST_NAMES:
+        return False
+    if name in WRITE_REQUEST_NAMES:
+        return True
     if any(name.startswith(prefix) for prefix in READ_REQUEST_PREFIXES):
         return False
     if any(name.startswith(prefix) for prefix in WRITE_REQUEST_PREFIXES):
@@ -458,6 +493,7 @@ def _acquire_session_lock(session_file: Path) -> None:
 atexit.register(_release_session_locks)
 atexit.register(_cleanup_runtime_session_files)
 
+
 def get_client():
     global _client
     if _client is None:
@@ -469,7 +505,9 @@ def get_client():
         # Усиливаем права хранилища перед созданием клиента
         _harden_session_storage(session_file.parent, session_file)
         runtime_session_name = (
-            str(session_file.with_suffix("")) if session_file.suffix == ".session" else str(session_file)
+            str(session_file.with_suffix(""))
+            if session_file.suffix == ".session"
+            else str(session_file)
         )
         _client = GuardedTelegramClient(
             runtime_session_name,
@@ -478,6 +516,7 @@ def get_client():
             receive_updates=RECEIVE_UPDATES,
         )
     return _client
+
 
 def get_client_for_session(custom_session_file_path: str):
     """Возвращает TelegramClient для указанного файла сессии.
@@ -500,7 +539,11 @@ def get_client_for_session(custom_session_file_path: str):
     client = _clients_by_path.get(key)
     if client is None:
         # Telethon appends .session automatically — strip it to avoid double extension
-        session_name = str(resolved.with_suffix("")) if resolved.suffix == ".session" else str(resolved)
+        session_name = (
+            str(resolved.with_suffix(""))
+            if resolved.suffix == ".session"
+            else str(resolved)
+        )
         client = GuardedTelegramClient(
             session_name,
             api_id,
@@ -510,14 +553,16 @@ def get_client_for_session(custom_session_file_path: str):
         _clients_by_path[key] = client
     return client
 
+
 async def test_connection():
     """Тестирует подключение к Telegram API с anti-spam защитой"""
     try:
         client = get_client()
         await client.start()
-        
+
         # Используем safe_call для get_me() и метрики
         import time
+
         start = time.perf_counter()
         try:
             increment_rate_limit_requests_total()
@@ -530,15 +575,19 @@ async def test_connection():
         finally:
             observe_tele_call_latency_seconds(time.perf_counter() - start)
         print(f"✅ Подключение успешно: {me.username} (ID: {me.id})")
-        
+
         # Показываем статистику anti-spam системы
         limiter = get_rate_limiter()
         stats = limiter.get_stats()
-        print(f"🛡️  Anti-spam статус: API calls: {stats['api_calls']}, RPS: {stats['current_rps']}")
-        
+        print(
+            f"🛡️  Anti-spam статус: API calls: {stats['api_calls']}, RPS: {stats['current_rps']}"
+        )
+
         await client.disconnect()
         # Усиливаем права после возможного создания/обновления файла сессии
-        _harden_session_storage(SESSION_DIR, _normalize_session_file_path(Path(session_path)))
+        _harden_session_storage(
+            SESSION_DIR, _normalize_session_file_path(Path(session_path))
+        )
         return True
     except SessionPasswordNeededError:
         print("❌ Требуется двухфакторная аутентификация")
@@ -549,6 +598,7 @@ async def test_connection():
     except Exception as e:
         print(f"❌ Ошибка подключения: {e}")
         return False
+
 
 if __name__ == "__main__":
     asyncio.run(test_connection())

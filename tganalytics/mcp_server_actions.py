@@ -5,6 +5,8 @@ Contains high-risk Telegram operations behind explicit env gates.
 
 from __future__ import annotations
 
+import asyncio
+import base64
 import json
 import os
 import secrets
@@ -14,7 +16,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(dotenv_path=os.environ.get("TG_ENV_FILE") or None)
 
 # Hard default: direct telethon writes are blocked unless context is actions_mcp.
 os.environ.setdefault("TG_BLOCK_DIRECT_TELETHON_WRITE", "1")
@@ -31,6 +33,13 @@ from mcp_actions_batch import (  # noqa: E402
     create_leave_dialog_batch_record,
     summarize_batch,
 )
+from mcp_actions_lane import (  # noqa: E402
+    create_write_lane_record,
+    lane_active_hours_error,
+    lane_scope_hash,
+    summarize_write_lane,
+    validate_lane_message,
+)
 from mcp_actions_policy import (  # noqa: E402
     detect_unsafe_defaults,
     hash_payload,
@@ -40,8 +49,21 @@ from mcp_actions_policy import (  # noqa: E402
 )
 from mcp_actions_state import load_json_dict, update_json_dict  # noqa: E402
 from mcp_server_common import MCPServerContext  # noqa: E402
+from tganalytics.domain.bot_workflow import (  # noqa: E402
+    button_data_bytes as _button_data_bytes,
+    message_button_options as _message_button_options,
+    normalize_bot_steps,
+    public_bot_steps as _public_bot_steps,
+    public_button_options as _public_button_options,
+    select_button_option as _select_button_option,
+)
+from tganalytics.infra.paths import resolve_state_path  # noqa: E402
 
-from tganalytics.infra.limiter import get_rate_limiter  # noqa: E402
+from tganalytics.infra.limiter import get_rate_limiter, safe_call  # noqa: E402
+from tganalytics.infra.managed_bot import (  # noqa: E402
+    CheckManagedBotUsernameRequest,
+    CreateManagedBotRequest,
+)
 from tganalytics.infra.metrics import snapshot  # noqa: E402
 
 SERVER_NAME = os.environ.get("TG_MCP_SERVER_NAME", "tganalytics-actions")
@@ -61,6 +83,11 @@ except ValueError:
     MAX_FILE_MB = 20
 
 try:
+    MAX_BOT_STEPS = int(os.environ.get("TG_ACTIONS_MAX_BOT_STEPS", "30"))
+except ValueError:
+    MAX_BOT_STEPS = 30
+
+try:
     MIN_CONFIRMATION_TEXT_LEN = int(
         os.environ.get("TG_ACTIONS_MIN_CONFIRM_TEXT_LEN", "6")
     )
@@ -77,13 +104,15 @@ except ValueError:
 REQUIRE_CONFIRMATION_TEXT = (
     os.environ.get("TG_ACTIONS_REQUIRE_CONFIRMATION_TEXT", "1") == "1"
 )
-CONFIRMATION_PHRASE = os.environ.get("TG_ACTIONS_CONFIRMATION_PHRASE", "").strip().lower()
+CONFIRMATION_PHRASE = (
+    os.environ.get("TG_ACTIONS_CONFIRMATION_PHRASE", "").strip().lower()
+)
 REQUIRE_APPROVAL_CODE = os.environ.get("TG_ACTIONS_REQUIRE_APPROVAL_CODE", "1") == "1"
 IDEMPOTENCY_ENABLED = os.environ.get("TG_ACTIONS_IDEMPOTENCY_ENABLED", "1") == "1"
-IDEMPOTENCY_FILE = Path(
-    os.environ.get(
-        "TG_ACTIONS_IDEMPOTENCY_FILE", "data/anti_spam/action_idempotency.json"
-    )
+IDEMPOTENCY_FILE = resolve_state_path(
+    os.environ.get("TG_ACTIONS_IDEMPOTENCY_FILE", ""),
+    "anti_spam",
+    "action_idempotency.json",
 )
 
 try:
@@ -96,8 +125,10 @@ try:
 except ValueError:
     APPROVAL_MIN_AGE_SEC = 30
 
-APPROVAL_FILE = Path(
-    os.environ.get("TG_ACTIONS_APPROVAL_FILE", "data/anti_spam/action_approvals.json")
+APPROVAL_FILE = resolve_state_path(
+    os.environ.get("TG_ACTIONS_APPROVAL_FILE", ""),
+    "anti_spam",
+    "action_approvals.json",
 )
 
 try:
@@ -117,9 +148,58 @@ try:
 except ValueError:
     BATCH_RUN_LEASE_SEC = 1800
 
-BATCH_FILE = Path(
-    os.environ.get("TG_ACTIONS_BATCH_FILE", "data/anti_spam/action_batches.json")
+BATCH_FILE = resolve_state_path(
+    os.environ.get("TG_ACTIONS_BATCH_FILE", ""),
+    "anti_spam",
+    "action_batches.json",
 )
+
+LANE_FILE = resolve_state_path(
+    os.environ.get("TG_ACTIONS_LANE_FILE", ""), "anti_spam", "action_lanes.json"
+)
+
+try:
+    LANE_MAX_TTL_SEC = int(
+        os.environ.get("TG_ACTIONS_LANE_MAX_TTL_SEC", str(24 * 3600))
+    )
+except ValueError:
+    LANE_MAX_TTL_SEC = 24 * 3600
+
+try:
+    LANE_APPROVAL_TTL_SEC = int(
+        os.environ.get("TG_ACTIONS_LANE_APPROVAL_TTL_SEC", str(APPROVAL_TTL_SEC))
+    )
+except ValueError:
+    LANE_APPROVAL_TTL_SEC = APPROVAL_TTL_SEC
+
+try:
+    LANE_MAX_TARGETS = int(os.environ.get("TG_ACTIONS_LANE_MAX_TARGETS", "20"))
+except ValueError:
+    LANE_MAX_TARGETS = 20
+
+try:
+    LANE_MAX_MESSAGES = int(os.environ.get("TG_ACTIONS_LANE_MAX_MESSAGES", "50"))
+except ValueError:
+    LANE_MAX_MESSAGES = 50
+
+try:
+    LANE_MIN_INTERVAL_SEC = int(
+        os.environ.get("TG_ACTIONS_LANE_MIN_INTERVAL_SEC", "30")
+    )
+except ValueError:
+    LANE_MIN_INTERVAL_SEC = 30
+
+try:
+    LANE_SEND_LOCK_SEC = int(os.environ.get("TG_ACTIONS_LANE_SEND_LOCK_SEC", "120"))
+except ValueError:
+    LANE_SEND_LOCK_SEC = 120
+
+try:
+    LANE_AUDIT_MAX_RECORDS = int(
+        os.environ.get("TG_ACTIONS_LANE_AUDIT_MAX_RECORDS", "200")
+    )
+except ValueError:
+    LANE_AUDIT_MAX_RECORDS = 200
 
 
 def _detect_unsafe_defaults() -> list[str]:
@@ -275,6 +355,69 @@ def _normalize_message_ids_arg(message_ids: Any) -> list[int]:
     if not normalized:
         raise ValueError("message_ids is empty")
     return normalized
+
+
+def _normalize_bot_steps(steps: Any) -> tuple[list[dict[str, Any]], str | None]:
+    return normalize_bot_steps(
+        steps, max_steps=MAX_BOT_STEPS, max_message_len=MAX_MESSAGE_LEN
+    )
+
+
+def _is_callback_timeout_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return (
+        "callback query in time" in text
+        or "bot did not answer" in text
+        or isinstance(exc, asyncio.TimeoutError)
+    )
+
+
+async def _find_button_for_step(
+    entity: Any, step: dict[str, Any]
+) -> tuple[Any, dict, list]:
+    message_id = int(step.get("message_id") or 0)
+    messages: list[Any]
+    if message_id > 0:
+        msg = await safe_call(
+            ctx.client.get_messages,
+            entity,
+            ids=message_id,
+            operation_type="api",
+        )
+        messages = [msg] if msg else []
+    else:
+        recent_limit = int(step.get("recent_limit") or 12)
+        fetched = await safe_call(
+            ctx.client.get_messages,
+            entity,
+            limit=recent_limit,
+            operation_type="api",
+        )
+        messages = list(fetched or [])
+
+    inspected: list[dict[str, Any]] = []
+    for msg in messages:
+        options = _message_button_options(msg)
+        public_options = _public_button_options(options)
+        inspected.append(
+            {
+                "message_id": getattr(msg, "id", None),
+                "text": str(getattr(msg, "message", "") or "")[:300],
+                "buttons": public_options,
+            }
+        )
+        selected, error = _select_button_option(
+            options,
+            button_text=str(step.get("button_text") or ""),
+            row=int(step.get("row", -1)),
+            col=int(step.get("col", -1)),
+            button_data_b64=str(step.get("button_data_b64") or ""),
+            exact_text=bool(step.get("exact_text", True)),
+        )
+        if selected and not error:
+            return msg, selected, inspected
+
+    raise ValueError("button selector did not match recent messages")
 
 
 def _load_idempotency_state() -> dict[str, float]:
@@ -504,6 +647,248 @@ def _approval_gate(
         return True, None, _issue_approval(action_hash)
     ok, err = _consume_approval(action_hash, approval_code)
     return ok, err, None
+
+
+def _load_lanes_state() -> dict[str, dict[str, Any]]:
+    lanes = load_json_dict(LANE_FILE, root_key="lanes")
+    return {str(k): v for k, v in lanes.items() if isinstance(v, dict)}
+
+
+def _save_lanes_state(state: dict[str, dict[str, Any]]) -> None:
+    normalized = {str(k): v for k, v in state.items() if isinstance(v, dict)}
+
+    def _mut(current: dict[str, Any]) -> None:
+        current.clear()
+        current.update(normalized)
+
+    update_json_dict(LANE_FILE, _mut, root_key="lanes")
+
+
+def _append_lane_audit(lane: dict[str, Any], event: dict[str, Any]) -> None:
+    audit = list(lane.get("audit") or [])
+    audit.append(event)
+    max_records = max(10, int(LANE_AUDIT_MAX_RECORDS))
+    lane["audit"] = audit[-max_records:]
+
+
+def _refresh_lane_status(lane: dict[str, Any], now_ts: int) -> None:
+    status = str(lane.get("status") or "")
+    if status in {"pending_approval", "active"} and str(
+        lane.get("scope_hash") or ""
+    ) != lane_scope_hash(lane):
+        lane["approved"] = False
+        lane["status"] = "invalid_scope"
+        lane["last_error"] = "write lane scope integrity check failed"
+        return
+    if (
+        status == "pending_approval"
+        and int(lane.get("approval_deadline_ts") or 0) <= now_ts
+    ):
+        lane["status"] = "expired"
+        lane["last_error"] = "lane approval window expired"
+        return
+    if status == "active" and int(lane.get("expires_at_ts") or 0) <= now_ts:
+        lane["status"] = "expired"
+        lane["last_error"] = "lane lease expired"
+        return
+    if status == "active" and int(lane.get("sent_count") or 0) >= int(
+        lane.get("max_messages") or 0
+    ):
+        lane["status"] = "exhausted"
+        lane["last_error"] = "lane message quota exhausted"
+
+
+def _get_write_lane(lane_id: str) -> tuple[dict[str, Any] | None, str | None]:
+    lane_key = str(lane_id or "").strip()
+    if not lane_key:
+        return None, "lane_id is empty"
+    now = int(time.time())
+
+    def _mut(state: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
+        lane = state.get(lane_key)
+        if not isinstance(lane, dict):
+            return None, f"write lane '{lane_key}' not found"
+        _refresh_lane_status(lane, now)
+        state[lane_key] = lane
+        return dict(lane), None
+
+    return update_json_dict(LANE_FILE, _mut, root_key="lanes")
+
+
+def _record_lane_attempt(
+    lane_id: str,
+    *,
+    target: str,
+    outcome: str,
+    action_hash: str | None = None,
+    message_len: int | None = None,
+    error: str | None = None,
+    now_ts: int | None = None,
+) -> None:
+    lane_key = str(lane_id or "").strip()
+    if not lane_key:
+        return
+    now = int(now_ts if now_ts is not None else time.time())
+
+    def _mut(state: dict[str, Any]) -> None:
+        lane = state.get(lane_key)
+        if not isinstance(lane, dict):
+            return
+        _refresh_lane_status(lane, now)
+        event: dict[str, Any] = {
+            "event_id": f"evt_{secrets.token_urlsafe(6)}",
+            "ts": now,
+            "target": _normalize_target(target),
+            "outcome": str(outcome),
+        }
+        if action_hash:
+            event["action_hash"] = action_hash
+        if message_len is not None:
+            event["message_len"] = int(message_len)
+        if error:
+            event["error"] = str(error)[:300]
+            lane["last_error"] = str(error)[:300]
+        _append_lane_audit(lane, event)
+        state[lane_key] = lane
+
+    update_json_dict(LANE_FILE, _mut, root_key="lanes")
+
+
+def _acquire_lane_send(
+    lane_id: str,
+    *,
+    target: str,
+    now_ts: int | None = None,
+) -> tuple[str | None, dict[str, Any] | None, str | None]:
+    lane_key = str(lane_id or "").strip()
+    normalized_target = _normalize_target(target)
+    now = int(now_ts if now_ts is not None else time.time())
+    token = secrets.token_urlsafe(12)
+
+    def _mut(
+        state: dict[str, Any],
+    ) -> tuple[str | None, dict[str, Any] | None, str | None]:
+        lane = state.get(lane_key)
+        if not isinstance(lane, dict):
+            return None, None, f"write lane '{lane_key}' not found"
+        _refresh_lane_status(lane, now)
+        if lane.get("status") != "active" or not bool(lane.get("approved")):
+            state[lane_key] = lane
+            return (
+                None,
+                dict(lane),
+                f"write lane is not active (status={lane.get('status')})",
+            )
+        if normalized_target not in set(lane.get("targets") or []):
+            return None, dict(lane), "target is outside the approved write lane"
+
+        hours_error = lane_active_hours_error(lane, now_ts=now)
+        if hours_error:
+            return None, dict(lane), hours_error
+
+        total_count = int(lane.get("sent_count") or 0)
+        max_total = int(lane.get("max_messages") or 0)
+        if total_count >= max_total:
+            lane["status"] = "exhausted"
+            lane["last_error"] = "lane message quota exhausted"
+            state[lane_key] = lane
+            return None, dict(lane), lane["last_error"]
+
+        target_counts = dict(lane.get("target_sent_counts") or {})
+        target_count = int(target_counts.get(normalized_target) or 0)
+        max_per_target = int(lane.get("max_messages_per_target") or 0)
+        if target_count >= max_per_target:
+            return None, dict(lane), "lane per-target message quota exhausted"
+
+        last_sent = int(
+            dict(lane.get("last_sent_at_by_target") or {}).get(normalized_target) or 0
+        )
+        min_interval = int(lane.get("min_interval_sec") or 0)
+        if last_sent and now - last_sent < min_interval:
+            retry_after = min_interval - (now - last_sent)
+            return (
+                None,
+                dict(lane),
+                f"lane min interval not reached; retry after {retry_after}s",
+            )
+
+        lock_until = int(lane.get("send_lock_until_ts") or 0)
+        if lock_until > now:
+            return None, dict(lane), f"lane send is locked until {lock_until}"
+
+        lane["send_lock_token"] = token
+        lane["send_lock_until_ts"] = now + max(10, int(LANE_SEND_LOCK_SEC))
+        state[lane_key] = lane
+        return token, dict(lane), None
+
+    return update_json_dict(LANE_FILE, _mut, root_key="lanes")
+
+
+def _finalize_lane_send(
+    lane_id: str,
+    *,
+    lock_token: str,
+    target: str,
+    action_hash: str,
+    message_len: int,
+    success: bool,
+    error: str | None = None,
+    now_ts: int | None = None,
+) -> tuple[dict[str, Any] | None, str | None]:
+    lane_key = str(lane_id or "").strip()
+    normalized_target = _normalize_target(target)
+    now = int(now_ts if now_ts is not None else time.time())
+
+    def _mut(state: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
+        lane = state.get(lane_key)
+        if not isinstance(lane, dict):
+            return None, f"write lane '{lane_key}' not found"
+        if str(lane.get("send_lock_token") or "") != str(lock_token or ""):
+            return dict(lane), "lane send lock was lost before finalization"
+
+        lane["send_lock_token"] = None
+        lane["send_lock_until_ts"] = now
+        outcome = "sent" if success else "send_failed"
+        event: dict[str, Any] = {
+            "event_id": f"evt_{secrets.token_urlsafe(6)}",
+            "ts": now,
+            "target": normalized_target,
+            "outcome": outcome,
+            "action_hash": action_hash,
+            "message_len": int(message_len),
+        }
+        if success:
+            lane["sent_count"] = int(lane.get("sent_count") or 0) + 1
+            target_counts = dict(lane.get("target_sent_counts") or {})
+            target_counts[normalized_target] = (
+                int(target_counts.get(normalized_target) or 0) + 1
+            )
+            lane["target_sent_counts"] = target_counts
+            last_sent = dict(lane.get("last_sent_at_by_target") or {})
+            last_sent[normalized_target] = now
+            lane["last_sent_at_by_target"] = last_sent
+            lane["last_error"] = None
+            _refresh_lane_status(lane, now)
+        else:
+            lane["last_error"] = str(error or "send_message failed")[:300]
+            event["error"] = lane["last_error"]
+        _append_lane_audit(lane, event)
+        state[lane_key] = lane
+        return dict(lane), None
+
+    return update_json_dict(LANE_FILE, _mut, root_key="lanes")
+
+
+async def _current_action_account() -> tuple[dict[str, Any] | None, str | None]:
+    auth = await ctx.auth_status()
+    if not auth.get("authorized"):
+        return None, str(
+            auth.get("error") or "Telegram actions session is unauthorized"
+        )
+    account = auth.get("account")
+    if not isinstance(account, dict) or account.get("id") is None:
+        return None, "Telegram actions session has no stable account id"
+    return account, None
 
 
 def _load_batches_state() -> dict[str, dict[str, Any]]:
@@ -748,6 +1133,176 @@ async def tg_resolve_username(username: str) -> dict:
 
 
 @mcp.tool()
+async def tg_create_managed_bot(
+    manager_bot: str,
+    name: str,
+    username: str,
+    dry_run: bool = True,
+    confirm: bool = False,
+    confirmation_text: str = "",
+    approval_code: str = "",
+    force_resend: bool = False,
+    via_deeplink: bool = False,
+) -> dict:
+    """Create a Telegram managed bot through an allowlisted manager bot."""
+    clean_manager = str(manager_bot or "").strip()
+    clean_name = str(name or "").strip()
+    clean_username = str(username or "").strip().lstrip("@")
+    if not clean_manager:
+        return _blocked("manager_bot is empty")
+    if not clean_name:
+        return _blocked("name is empty")
+    if not clean_username:
+        return _blocked("username is empty")
+
+    can_run, error = _check_action_preconditions(
+        clean_manager,
+        dry_run=dry_run,
+        confirm=confirm,
+        confirmation_text=confirmation_text,
+    )
+    if not can_run:
+        return _blocked(error or "preconditions failed")
+
+    action_hash = _hash_payload(
+        {
+            "action": "create_managed_bot",
+            "manager_bot": _normalize_target(clean_manager),
+            "name": clean_name,
+            "username": clean_username.lower(),
+            "via_deeplink": bool(via_deeplink),
+        }
+    )
+    approval_ok, approval_error, approval_meta = _approval_gate(
+        action_hash=action_hash,
+        dry_run=dry_run,
+        approval_code=approval_code,
+    )
+    if not approval_ok:
+        return _blocked(approval_error or "approval gate blocked")
+
+    if not dry_run and not force_resend:
+        duplicate, retry_after_sec = _check_recent_duplicate(action_hash)
+        if duplicate:
+            return {
+                "success": False,
+                "duplicate_blocked": True,
+                "retry_after_sec": retry_after_sec,
+                "action_hash": action_hash,
+                "error": "Duplicate action blocked by idempotency window. "
+                "Set force_resend=true to override.",
+            }
+
+    manager = await ctx.get_manager()
+    try:
+        manager_entity = await manager._resolve_target_entity(clean_manager)
+        username_available = await safe_call(
+            ctx.client,
+            CheckManagedBotUsernameRequest(username=clean_username),
+            operation_type="api",
+        )
+    except Exception as exc:
+        return _blocked(
+            str(exc),
+            manager_bot=clean_manager,
+            username=clean_username,
+            action_hash=action_hash,
+        )
+
+    preview = {
+        "success": True,
+        "dry_run": True,
+        "manager_bot": clean_manager,
+        "manager_id": getattr(manager_entity, "id", None),
+        "name": clean_name,
+        "username": clean_username,
+        "username_available": bool(username_available),
+        "via_deeplink": bool(via_deeplink),
+        "action_hash": action_hash,
+        "confirmation_text_required": (
+            CONFIRMATION_PHRASE if REQUIRE_CONFIRMATION_TEXT else None
+        ),
+    }
+    if approval_meta:
+        preview.update(approval_meta)
+    if dry_run:
+        return preview
+
+    if not bool(username_available):
+        return _blocked(
+            "Telegram reports that the managed-bot username is unavailable",
+            manager_bot=clean_manager,
+            username=clean_username,
+            action_hash=action_hash,
+        )
+
+    try:
+        created = await safe_call(
+            ctx.client,
+            CreateManagedBotRequest(
+                name=clean_name,
+                username=clean_username,
+                manager_id=manager_entity,
+                via_deeplink=bool(via_deeplink),
+            ),
+            operation_type="api",
+        )
+    except Exception as exc:
+        # Telegram may return a newer User constructor than the pinned
+        # Telethon understands. At that point the mutation already succeeded;
+        # verify the exact username read-only before recording success.
+        if "Could not find a matching Constructor ID" in str(exc):
+            try:
+                verified = await manager.resolve_username(clean_username)
+            except Exception:
+                verified = None
+            if (
+                isinstance(verified, dict)
+                and str(verified.get("username") or "").lower()
+                == clean_username.lower()
+                and bool(verified.get("is_bot"))
+            ):
+                _mark_action_executed(action_hash)
+                return {
+                    "success": False,
+                    "outcome_unknown": True,
+                    "error": "bot exists, but creation and manager ownership could not be verified",
+                    "dry_run": False,
+                    "manager_bot": clean_manager,
+                    "manager_id": getattr(manager_entity, "id", None),
+                    "observed_bot": {
+                        "id": verified.get("id"),
+                        "username": verified.get("username"),
+                        "name": verified.get("first_name"),
+                        "is_bot": True,
+                    },
+                    "response_parse_warning": "new Telegram User constructor",
+                    "action_hash": action_hash,
+                }
+        return _blocked(
+            str(exc),
+            manager_bot=clean_manager,
+            username=clean_username,
+            action_hash=action_hash,
+        )
+
+    _mark_action_executed(action_hash)
+    return {
+        "success": True,
+        "dry_run": False,
+        "manager_bot": clean_manager,
+        "manager_id": getattr(manager_entity, "id", None),
+        "created_bot": {
+            "id": getattr(created, "id", None),
+            "username": getattr(created, "username", None),
+            "name": getattr(created, "first_name", None),
+            "is_bot": bool(getattr(created, "bot", False)),
+        },
+        "action_hash": action_hash,
+    }
+
+
+@mcp.tool()
 async def tg_get_my_dialogs(limit: int = 100, dialog_type: str = "all") -> dict:
     """List dialogs to choose safe action targets."""
     manager = await ctx.get_manager()
@@ -852,6 +1407,374 @@ async def tg_set_channel_comments_join_requirement(
 
 
 @mcp.tool()
+async def tg_click_inline_button(
+    group: str,
+    message_id: int,
+    button_text: str = "",
+    row: int = -1,
+    col: int = -1,
+    button_data_b64: str = "",
+    exact_text: bool = True,
+    dry_run: bool = True,
+    confirm: bool = False,
+    confirmation_text: str = "",
+    approval_code: str = "",
+    force_resend: bool = False,
+) -> dict:
+    """Click an inline callback button on a bot message with ActionMCP gates."""
+    can_run, error = _check_action_preconditions(
+        group,
+        dry_run=dry_run,
+        confirm=confirm,
+        confirmation_text=confirmation_text,
+    )
+    if not can_run:
+        return _blocked(error or "preconditions failed")
+
+    try:
+        normalized_message_id = int(message_id)
+    except Exception:
+        return _blocked(f"Invalid message_id: {message_id!r}")
+    if normalized_message_id <= 0:
+        return _blocked("message_id must be > 0")
+
+    try:
+        normalized_row = int(row)
+        normalized_col = int(col)
+    except Exception:
+        return _blocked("row and col must be integers")
+
+    manager = await ctx.get_manager()
+    try:
+        entity = await manager._resolve_target_entity(group)
+        msg = await safe_call(
+            ctx.client.get_messages,
+            entity,
+            ids=normalized_message_id,
+            operation_type="api",
+        )
+    except Exception as exc:
+        return _blocked(str(exc))
+
+    if not msg:
+        return _blocked(
+            f"message_id {normalized_message_id} not found",
+            target=group,
+            message_id=normalized_message_id,
+        )
+
+    options = _message_button_options(msg)
+    selected, select_error = _select_button_option(
+        options,
+        button_text=button_text,
+        row=normalized_row,
+        col=normalized_col,
+        button_data_b64=button_data_b64,
+        exact_text=bool(exact_text),
+    )
+    public_options = _public_button_options(options)
+    if select_error or not selected:
+        return _blocked(
+            select_error or "button selector failed",
+            target=group,
+            message_id=normalized_message_id,
+            available_buttons=public_options,
+        )
+
+    selected_public = dict(selected)
+    selected_public.pop("_button", None)
+    selected_data = _button_data_bytes(selected.get("_button"))
+    if selected_data is None:
+        return _blocked(
+            "selected button is not an inline callback button",
+            target=group,
+            message_id=normalized_message_id,
+            selected_button=selected_public,
+            available_buttons=public_options,
+        )
+
+    action_hash = _hash_payload(
+        {
+            "action": "click_inline_button",
+            "target": _normalize_target(group),
+            "message_id": normalized_message_id,
+            "button_data_b64": base64.b64encode(selected_data).decode("ascii"),
+            "button_text": str(selected.get("text") or ""),
+        }
+    )
+
+    approval_ok, approval_error, approval_meta = _approval_gate(
+        action_hash=action_hash,
+        dry_run=dry_run,
+        approval_code=approval_code,
+    )
+    if not approval_ok:
+        return _blocked(approval_error or "approval gate blocked")
+
+    if dry_run:
+        result = {
+            "success": True,
+            "dry_run": True,
+            "target": group,
+            "message_id": normalized_message_id,
+            "selected_button": selected_public,
+            "available_buttons": public_options,
+            "action_hash": action_hash,
+            "confirmation_text_required": (
+                CONFIRMATION_PHRASE if REQUIRE_CONFIRMATION_TEXT else None
+            ),
+        }
+        if approval_meta:
+            result.update(approval_meta)
+        return result
+
+    if not force_resend:
+        duplicate, retry_after_sec = _check_recent_duplicate(action_hash)
+        if duplicate:
+            return {
+                "success": False,
+                "duplicate_blocked": True,
+                "retry_after_sec": retry_after_sec,
+                "action_hash": action_hash,
+                "error": "Duplicate action blocked by idempotency window. "
+                "Set force_resend=true to override.",
+            }
+
+    from telethon.tl.functions.messages import GetBotCallbackAnswerRequest
+
+    try:
+        response = await safe_call(
+            ctx.client,
+            GetBotCallbackAnswerRequest(
+                peer=entity,
+                msg_id=normalized_message_id,
+                data=selected_data,
+            ),
+            operation_type="group_msg",
+        )
+    except Exception as exc:
+        return _blocked(
+            str(exc),
+            target=group,
+            message_id=normalized_message_id,
+            selected_button=selected_public,
+            action_hash=action_hash,
+        )
+
+    _mark_action_executed(action_hash)
+    return {
+        "success": True,
+        "dry_run": False,
+        "target": group,
+        "message_id": normalized_message_id,
+        "selected_button": selected_public,
+        "response_type": type(response).__name__,
+        "response_message": getattr(response, "message", None),
+        "response_url": getattr(response, "url", None),
+        "response_alert": getattr(response, "alert", None),
+        "action_hash": action_hash,
+    }
+
+
+@mcp.tool()
+async def tg_run_bot_steps(
+    group: str,
+    steps: list[dict[str, Any]],
+    dry_run: bool = True,
+    confirm: bool = False,
+    confirmation_text: str = "",
+    approval_code: str = "",
+    force_resend: bool = False,
+) -> dict:
+    """Run a pre-approved sequence of bot send/click steps in one allowlisted dialog."""
+    can_run, error = _check_action_preconditions(
+        group,
+        dry_run=dry_run,
+        confirm=confirm,
+        confirmation_text=confirmation_text,
+    )
+    if not can_run:
+        return _blocked(error or "preconditions failed")
+
+    normalized_steps, step_error = _normalize_bot_steps(steps)
+    if step_error:
+        return _blocked(step_error)
+
+    action_hash = _hash_payload(
+        {
+            "action": "run_bot_steps",
+            "target": _normalize_target(group),
+            "steps": _public_bot_steps(normalized_steps),
+        }
+    )
+
+    approval_ok, approval_error, approval_meta = _approval_gate(
+        action_hash=action_hash,
+        dry_run=dry_run,
+        approval_code=approval_code,
+    )
+    if not approval_ok:
+        return _blocked(approval_error or "approval gate blocked")
+
+    preview_payload = {
+        "success": True,
+        "dry_run": True,
+        "target": group,
+        "step_count": len(normalized_steps),
+        "steps": _public_bot_steps(normalized_steps),
+        "action_hash": action_hash,
+        "confirmation_text_required": (
+            CONFIRMATION_PHRASE if REQUIRE_CONFIRMATION_TEXT else None
+        ),
+    }
+    if approval_meta:
+        preview_payload.update(approval_meta)
+    if dry_run:
+        return preview_payload
+
+    if not force_resend:
+        duplicate, retry_after_sec = _check_recent_duplicate(action_hash)
+        if duplicate:
+            return {
+                "success": False,
+                "duplicate_blocked": True,
+                "retry_after_sec": retry_after_sec,
+                "action_hash": action_hash,
+                "error": "Duplicate action blocked by idempotency window. "
+                "Set force_resend=true to override.",
+            }
+
+    manager = await ctx.get_manager()
+    try:
+        entity = await manager._resolve_target_entity(group)
+    except Exception as exc:
+        return _blocked(str(exc), target=group, action_hash=action_hash)
+
+    from telethon.tl.functions.messages import GetBotCallbackAnswerRequest
+
+    results: list[dict[str, Any]] = []
+    for index, step in enumerate(normalized_steps):
+        kind = step.get("type")
+        if kind == "wait":
+            await asyncio.sleep(float(step.get("wait_after_sec") or 0))
+            results.append({"index": index, "type": kind, "success": True})
+            continue
+
+        if kind == "send_message":
+            try:
+                sent = await safe_call(
+                    ctx.client.send_message,
+                    entity,
+                    str(step.get("text") or ""),
+                    operation_type="group_msg",
+                )
+            except Exception as exc:
+                return _blocked(
+                    str(exc),
+                    target=group,
+                    action_hash=action_hash,
+                    completed_steps=results,
+                    failed_step=index,
+                )
+            results.append(
+                {
+                    "index": index,
+                    "type": kind,
+                    "success": True,
+                    "message_id": getattr(sent, "id", None),
+                    "message_len": len(str(step.get("text") or "")),
+                }
+            )
+            await asyncio.sleep(float(step.get("wait_after_sec") or 0))
+            continue
+
+        try:
+            msg, selected, inspected = await _find_button_for_step(entity, step)
+        except Exception as exc:
+            return _blocked(
+                str(exc),
+                target=group,
+                action_hash=action_hash,
+                completed_steps=results,
+                failed_step=index,
+            )
+
+        selected_public = dict(selected)
+        selected_public.pop("_button", None)
+        selected_data = _button_data_bytes(selected.get("_button"))
+        if selected_data is None:
+            return _blocked(
+                "selected button is not an inline callback button",
+                target=group,
+                action_hash=action_hash,
+                completed_steps=results,
+                failed_step=index,
+                selected_button=selected_public,
+            )
+
+        callback_error = None
+        callback_success = True
+        try:
+            response = await safe_call(
+                ctx.client,
+                GetBotCallbackAnswerRequest(
+                    peer=entity,
+                    msg_id=int(getattr(msg, "id")),
+                    data=selected_data,
+                ),
+                operation_type="group_msg",
+                timeout=float(step.get("callback_timeout_sec") or 8.0),
+            )
+            response_payload = {
+                "response_type": type(response).__name__,
+                "response_message": getattr(response, "message", None),
+                "response_url": getattr(response, "url", None),
+                "response_alert": getattr(response, "alert", None),
+            }
+        except Exception as exc:
+            response_payload = {}
+            callback_error = str(exc)
+            callback_success = False
+            if not (
+                bool(step.get("continue_on_callback_timeout", True))
+                and _is_callback_timeout_error(exc)
+            ):
+                return _blocked(
+                    str(exc),
+                    target=group,
+                    action_hash=action_hash,
+                    completed_steps=results,
+                    failed_step=index,
+                    selected_button=selected_public,
+                )
+
+        results.append(
+            {
+                "index": index,
+                "type": kind,
+                "success": callback_success,
+                "nonfatal_callback_error": callback_error,
+                "message_id": getattr(msg, "id", None),
+                "selected_button": selected_public,
+                "inspected_message_count": len(inspected),
+                **response_payload,
+            }
+        )
+        await asyncio.sleep(float(step.get("wait_after_sec") or 0))
+
+    _mark_action_executed(action_hash)
+    return {
+        "success": True,
+        "dry_run": False,
+        "target": group,
+        "step_count": len(normalized_steps),
+        "steps_completed": len(results),
+        "results": results,
+        "action_hash": action_hash,
+    }
+
+
+@mcp.tool()
 async def tg_send_message(
     group: str,
     message_text: str,
@@ -941,6 +1864,506 @@ async def tg_send_message(
         "action_hash": action_hash,
         "error": "send_message failed (see server logs for details)",
     }
+
+
+@mcp.tool()
+async def tg_pin_message(
+    group: str,
+    message_id: int,
+    notify: bool = False,
+    dry_run: bool = True,
+    confirm: bool = False,
+    confirmation_text: str = "",
+    approval_code: str = "",
+    force_resend: bool = False,
+) -> dict:
+    """Pin one message with policy gates and idempotency."""
+    can_run, error = _check_action_preconditions(
+        group,
+        dry_run=dry_run,
+        confirm=confirm,
+        confirmation_text=confirmation_text,
+    )
+    if not can_run:
+        return _blocked(error or "preconditions failed")
+
+    try:
+        normalized_message_id = int(message_id)
+    except (TypeError, ValueError):
+        return _blocked("message_id must be a positive integer")
+    if normalized_message_id <= 0:
+        return _blocked("message_id must be a positive integer")
+
+    action_hash = _hash_payload(
+        {
+            "action": "pin_message",
+            "target": _normalize_target(group),
+            "message_id": normalized_message_id,
+            "notify": bool(notify),
+        }
+    )
+
+    approval_ok, approval_error, approval_meta = _approval_gate(
+        action_hash=action_hash,
+        dry_run=dry_run,
+        approval_code=approval_code,
+    )
+    if not approval_ok:
+        return _blocked(approval_error or "approval gate blocked")
+
+    if dry_run:
+        result = {
+            "success": True,
+            "dry_run": True,
+            "target": group,
+            "message_id": normalized_message_id,
+            "notify": bool(notify),
+            "action_hash": action_hash,
+            "confirmation_text_required": (
+                CONFIRMATION_PHRASE if REQUIRE_CONFIRMATION_TEXT else None
+            ),
+        }
+        if approval_meta:
+            result.update(approval_meta)
+        return result
+
+    if not force_resend:
+        duplicate, retry_after_sec = _check_recent_duplicate(action_hash)
+        if duplicate:
+            return {
+                "success": False,
+                "duplicate_blocked": True,
+                "retry_after_sec": retry_after_sec,
+                "action_hash": action_hash,
+                "error": "Duplicate action blocked by idempotency window. "
+                "Set force_resend=true to override.",
+            }
+
+    manager = await ctx.get_manager()
+    pinned = await manager.pin_message(
+        group,
+        normalized_message_id,
+        notify=bool(notify),
+    )
+    if pinned:
+        _mark_action_executed(action_hash)
+        return {
+            "success": True,
+            "target": group,
+            "message_id": normalized_message_id,
+            "notify": bool(notify),
+            "action_hash": action_hash,
+        }
+
+    return {
+        "success": False,
+        "target": group,
+        "message_id": normalized_message_id,
+        "action_hash": action_hash,
+        "error": "pin_message failed (see server logs for details)",
+    }
+
+
+@mcp.tool()
+async def tg_create_write_lane(
+    name: str,
+    purpose: str,
+    targets: list[str],
+    ttl_sec: int = 3600,
+    max_messages: int = 20,
+    max_messages_per_target: int = 10,
+    min_interval_sec: int = 300,
+    max_message_len: int = 1000,
+    allow_links: bool = False,
+    active_hours_start: str = "",
+    active_hours_end: str = "",
+    active_timezone: str = "",
+) -> dict:
+    """Create an inert send-message lane and return its exact approval preview."""
+    if SAFE_STARTUP_BLOCK_REASON:
+        return _blocked(SAFE_STARTUP_BLOCK_REASON)
+    if not ACTIONS_ENABLED:
+        return _blocked("Actions are disabled. Set TG_ACTIONS_ENABLED=1.")
+
+    lane, error = create_write_lane_record(
+        name=name,
+        purpose=purpose,
+        targets=list(targets or []),
+        ttl_sec=ttl_sec,
+        max_messages=max_messages,
+        max_messages_per_target=max_messages_per_target,
+        min_interval_sec=min_interval_sec,
+        max_message_len=max_message_len,
+        allow_links=allow_links,
+        active_hours_start=active_hours_start,
+        active_hours_end=active_hours_end,
+        active_timezone=active_timezone,
+        max_ttl_sec=LANE_MAX_TTL_SEC,
+        max_targets=LANE_MAX_TARGETS,
+        max_total_messages=LANE_MAX_MESSAGES,
+        min_allowed_interval_sec=LANE_MIN_INTERVAL_SEC,
+        global_max_message_len=MAX_MESSAGE_LEN,
+        approval_ttl_sec=LANE_APPROVAL_TTL_SEC,
+        check_target_allowed=_check_target_allowed,
+    )
+    if lane is None:
+        return _blocked(error or "write lane validation failed")
+
+    def _mut(state: dict[str, Any]) -> None:
+        state[str(lane["id"])] = lane
+
+    update_json_dict(LANE_FILE, _mut, root_key="lanes")
+    approval_meta = _issue_approval(str(lane["scope_hash"]))
+    result = {
+        "success": True,
+        **summarize_write_lane(lane),
+        "scope_hash": lane["scope_hash"],
+        "confirmation_text_required": (
+            CONFIRMATION_PHRASE if REQUIRE_CONFIRMATION_TEXT else None
+        ),
+        "next_step": (
+            "Show this exact scope to the user, then call tg_approve_write_lane "
+            "with confirmation_text and approval_code. The lane cannot write yet."
+        ),
+    }
+    result.update(approval_meta)
+    return result
+
+
+@mcp.tool()
+async def tg_approve_write_lane(
+    lane_id: str,
+    confirmation_text: str,
+    approval_code: str,
+) -> dict:
+    """Activate one immutable write lane with one explicit human approval."""
+    if SAFE_STARTUP_BLOCK_REASON:
+        return _blocked(SAFE_STARTUP_BLOCK_REASON)
+    if not ACTIONS_ENABLED:
+        return _blocked("Actions are disabled. Set TG_ACTIONS_ENABLED=1.")
+
+    lane, error = _get_write_lane(lane_id)
+    if lane is None:
+        return _blocked(error or "write lane not found")
+    if lane.get("status") != "pending_approval":
+        return _blocked(
+            f"write lane cannot be approved from status={lane.get('status')}",
+            **summarize_write_lane(lane),
+        )
+
+    ok, confirmation_error = _validate_confirmation_text(
+        confirmation_text, dry_run=False
+    )
+    if not ok:
+        return _blocked(confirmation_error or "confirmation_text validation failed")
+
+    expected_scope_hash = lane_scope_hash(lane)
+    if str(lane.get("scope_hash") or "") != expected_scope_hash:
+        return _blocked("write lane scope changed after preview; create a fresh lane")
+
+    account, account_error = await _current_action_account()
+    if account is None:
+        return _blocked(account_error or "could not bind write lane to account")
+
+    # Verify the live Telegram identity before consuming the one-time code. A
+    # transient auth/session failure must not burn a human approval.
+    approval_ok, approval_error = _consume_approval(expected_scope_hash, approval_code)
+    if not approval_ok:
+        return _blocked(approval_error or "write lane approval code was rejected")
+
+    now = int(time.time())
+    lane_key = str(lane_id or "").strip()
+
+    def _mut(state: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
+        current = state.get(lane_key)
+        if not isinstance(current, dict):
+            return None, f"write lane '{lane_key}' not found"
+        _refresh_lane_status(current, now)
+        if current.get("status") != "pending_approval":
+            return (
+                dict(current),
+                f"write lane cannot be approved from status={current.get('status')}",
+            )
+        if lane_scope_hash(current) != expected_scope_hash:
+            return dict(current), "write lane scope changed after preview"
+        current["approved"] = True
+        current["status"] = "active"
+        current["approved_at_ts"] = now
+        current["expires_at_ts"] = now + int(current.get("ttl_sec") or 0)
+        current["bound_account_id"] = account.get("id")
+        current["bound_username"] = str(account.get("username") or "").strip().lower()
+        current["last_error"] = None
+        _append_lane_audit(
+            current,
+            {
+                "event_id": f"evt_{secrets.token_urlsafe(6)}",
+                "ts": now,
+                "outcome": "approved",
+            },
+        )
+        state[lane_key] = current
+        return dict(current), None
+
+    approved_lane, state_error = update_json_dict(LANE_FILE, _mut, root_key="lanes")
+    if approved_lane is None or state_error:
+        return _blocked(state_error or "failed to activate write lane")
+    return {
+        "success": True,
+        **summarize_write_lane(approved_lane),
+        "scope_hash": approved_lane.get("scope_hash"),
+        "delegated_actions": ["send_message"],
+        "next_step": (
+            "Use tg_send_message_with_lane. Per-message confirmation is waived only "
+            "inside this exact scope until expiry, exhaustion, or revoke."
+        ),
+    }
+
+
+@mcp.tool()
+async def tg_get_write_lane(lane_id: str, include_audit: bool = False) -> dict:
+    """Inspect one lane without changing its authority."""
+    lane, error = _get_write_lane(lane_id)
+    if lane is None:
+        return _blocked(error or "write lane not found")
+    result = {"success": True, **summarize_write_lane(lane)}
+    if include_audit:
+        result["audit"] = list(lane.get("audit") or [])[-50:]
+    return result
+
+
+@mcp.tool()
+async def tg_list_write_lanes(status: str = "") -> dict:
+    """List compact lane summaries, optionally filtered by status."""
+    wanted = str(status or "").strip().lower()
+    now = int(time.time())
+
+    def _mut(state: dict[str, Any]) -> list[dict[str, Any]]:
+        summaries: list[dict[str, Any]] = []
+        for lane_id, lane in state.items():
+            if not isinstance(lane, dict):
+                continue
+            _refresh_lane_status(lane, now)
+            state[str(lane_id)] = lane
+            if wanted and str(lane.get("status") or "").lower() != wanted:
+                continue
+            summaries.append(summarize_write_lane(lane))
+        summaries.sort(
+            key=lambda item: int(item.get("created_at_ts") or 0), reverse=True
+        )
+        return summaries
+
+    lanes = update_json_dict(LANE_FILE, _mut, root_key="lanes")
+    return {"success": True, "count": len(lanes), "lanes": lanes}
+
+
+@mcp.tool()
+async def tg_revoke_write_lane(lane_id: str, reason: str = "") -> dict:
+    """Immediately revoke a lane; revocation never needs write approval."""
+    lane_key = str(lane_id or "").strip()
+    if not lane_key:
+        return _blocked("lane_id is empty")
+    now = int(time.time())
+    clean_reason = str(reason or "").strip()[:300]
+
+    def _mut(state: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
+        lane = state.get(lane_key)
+        if not isinstance(lane, dict):
+            return None, f"write lane '{lane_key}' not found"
+        if lane.get("status") == "revoked":
+            return dict(lane), None
+        lane["approved"] = False
+        lane["status"] = "revoked"
+        lane["revoked_at_ts"] = now
+        lane["revoked_reason"] = clean_reason or "revoked by operator"
+        # Keep an existing in-flight token so its eventual result can still be
+        # finalized and audited. Status=revoked blocks every new acquisition.
+        _append_lane_audit(
+            lane,
+            {
+                "event_id": f"evt_{secrets.token_urlsafe(6)}",
+                "ts": now,
+                "outcome": "revoked",
+                "reason": lane["revoked_reason"],
+            },
+        )
+        state[lane_key] = lane
+        return dict(lane), None
+
+    lane, error = update_json_dict(LANE_FILE, _mut, root_key="lanes")
+    if lane is None:
+        return _blocked(error or "write lane not found")
+    return {"success": True, **summarize_write_lane(lane)}
+
+
+@mcp.tool()
+async def tg_send_message_with_lane(
+    lane_id: str,
+    group: str,
+    message_text: str,
+    dry_run: bool = True,
+) -> dict:
+    """Send text under one active, account-bound, time-limited write lane."""
+    if SAFE_STARTUP_BLOCK_REASON:
+        return _blocked(SAFE_STARTUP_BLOCK_REASON)
+    if not ACTIONS_ENABLED:
+        return _blocked("Actions are disabled. Set TG_ACTIONS_ENABLED=1.")
+
+    lane, lane_error = _get_write_lane(lane_id)
+    if lane is None:
+        return _blocked(lane_error or "write lane not found")
+    if lane.get("status") != "active" or not bool(lane.get("approved")):
+        return _blocked(
+            f"write lane is not active (status={lane.get('status')})",
+            **summarize_write_lane(lane),
+        )
+
+    allowed, allowlist_error = _check_target_allowed(group)
+    if not allowed:
+        _record_lane_attempt(
+            lane_id,
+            target=group,
+            outcome="blocked_allowlist",
+            error=allowlist_error,
+        )
+        return _blocked(allowlist_error or "target is blocked by allowlist")
+
+    normalized_target = _normalize_target(group)
+    if normalized_target not in set(lane.get("targets") or []):
+        error = "target is outside the approved write lane"
+        _record_lane_attempt(
+            lane_id, target=group, outcome="blocked_scope", error=error
+        )
+        return _blocked(error, **summarize_write_lane(lane))
+
+    clean_text, message_error = validate_lane_message(lane, message_text)
+    if clean_text is None:
+        _record_lane_attempt(
+            lane_id,
+            target=group,
+            outcome="blocked_content",
+            error=message_error,
+        )
+        return _blocked(message_error or "message policy blocked send")
+
+    account, account_error = await _current_action_account()
+    if account is None:
+        _record_lane_attempt(
+            lane_id,
+            target=group,
+            outcome="blocked_account",
+            error=account_error,
+        )
+        return _blocked(account_error or "could not verify Telegram account")
+    if account.get("id") != lane.get("bound_account_id"):
+        error = "current Telegram account does not match the lane-bound account"
+        _record_lane_attempt(
+            lane_id, target=group, outcome="blocked_account", error=error
+        )
+        return _blocked(error)
+
+    action_hash = _hash_payload(
+        {
+            "action": "send_message",
+            "target": normalized_target,
+            "text": clean_text,
+        }
+    )
+    duplicate, retry_after_sec = _check_recent_duplicate(action_hash)
+    if duplicate:
+        error = "Duplicate action blocked by idempotency window."
+        _record_lane_attempt(
+            lane_id,
+            target=group,
+            outcome="blocked_duplicate",
+            action_hash=action_hash,
+            message_len=len(clean_text),
+            error=error,
+        )
+        return {
+            "success": False,
+            "duplicate_blocked": True,
+            "retry_after_sec": retry_after_sec,
+            "lane_id": lane_id,
+            "target": group,
+            "action_hash": action_hash,
+            "error": error,
+        }
+
+    if dry_run:
+        return {
+            "success": True,
+            "dry_run": True,
+            "lane_id": lane_id,
+            "target": group,
+            "message_len": len(clean_text),
+            "action_hash": action_hash,
+            "lane": summarize_write_lane(lane),
+            "next_step": "Call again with dry_run=false to consume lane quota and send.",
+        }
+
+    manager = await ctx.get_manager()
+    lock_token, locked_lane, lock_error = _acquire_lane_send(lane_id, target=group)
+    if lock_token is None:
+        _record_lane_attempt(
+            lane_id,
+            target=group,
+            outcome="blocked_quota_or_lock",
+            action_hash=action_hash,
+            message_len=len(clean_text),
+            error=lock_error,
+        )
+        return _blocked(
+            lock_error or "write lane send could not acquire lease",
+            **(summarize_write_lane(locked_lane) if locked_lane else {}),
+        )
+
+    sent = False
+    send_error: str | None = None
+    try:
+        sent = bool(await manager.send_message(group, clean_text))
+        if not sent:
+            send_error = "send_message failed (see server logs for details)"
+    except Exception as exc:
+        send_error = str(exc)
+
+    # Once Telegram reports success, reserve the payload immediately. Even if
+    # lane finalization later fails, an automatic retry must not duplicate it.
+    if sent:
+        _mark_action_executed(action_hash)
+
+    finalized_lane, finalize_error = _finalize_lane_send(
+        lane_id,
+        lock_token=lock_token,
+        target=group,
+        action_hash=action_hash,
+        message_len=len(clean_text),
+        success=sent,
+        error=send_error,
+    )
+    if finalize_error:
+        return _blocked(
+            finalize_error,
+            lane_id=lane_id,
+            target=group,
+            action_hash=action_hash,
+            telegram_send_result=sent,
+        )
+    if sent:
+        return {
+            "success": True,
+            "lane_id": lane_id,
+            "target": group,
+            "message_len": len(clean_text),
+            "action_hash": action_hash,
+            "lane": summarize_write_lane(finalized_lane or lane),
+        }
+    return _blocked(
+        send_error or "send_message failed",
+        lane_id=lane_id,
+        target=group,
+        action_hash=action_hash,
+        lane=summarize_write_lane(finalized_lane or lane),
+    )
 
 
 @mcp.tool()
@@ -1287,6 +2710,206 @@ async def tg_leave_dialog(
         result.update(approval_meta)
     if not dry_run and result.get("success"):
         _mark_action_executed(action_hash)
+    return result
+
+
+@mcp.tool()
+async def tg_delete_contacts(
+    users: list[str],
+    dry_run: bool = True,
+    confirm: bool = False,
+    confirmation_text: str = "",
+    approval_code: str = "",
+    force_resend: bool = False,
+) -> dict:
+    """Delete Telegram contacts by user id/username with policy gates."""
+    normalized_users = []
+    seen = set()
+    for raw in users or []:
+        value = str(raw or "").strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        normalized_users.append(value)
+    if not normalized_users:
+        return _blocked("users list is empty")
+
+    blocked_targets = []
+    for user in normalized_users:
+        allowed, error = _check_target_allowed(user)
+        if not allowed:
+            blocked_targets.append({"user": user, "error": error})
+    if blocked_targets:
+        return _blocked(
+            "one or more users are not in allowlist", blocked_targets=blocked_targets
+        )
+
+    if SAFE_STARTUP_BLOCK_REASON:
+        return _blocked(SAFE_STARTUP_BLOCK_REASON)
+    if not ACTIONS_ENABLED:
+        return _blocked("Actions are disabled. Set TG_ACTIONS_ENABLED=1.")
+    if not dry_run and not confirm:
+        return _blocked(
+            "Execution blocked: set confirm=true to run destructive action. "
+            "Use dry_run=true to preview safely."
+        )
+    ok, err = _validate_confirmation_text(confirmation_text, dry_run=dry_run)
+    if not ok:
+        return _blocked(err or "confirmation_text validation failed")
+
+    action_hash = _hash_payload(
+        {
+            "action": "delete_contacts",
+            "users": sorted(_normalize_target(user) for user in normalized_users),
+        }
+    )
+    approval_ok, approval_error, approval_meta = _approval_gate(
+        action_hash=action_hash,
+        dry_run=dry_run,
+        approval_code=approval_code,
+    )
+    if not approval_ok:
+        return _blocked(approval_error or "approval gate blocked")
+
+    await ctx.get_manager()
+    input_users = []
+    resolved = []
+    for user in normalized_users:
+        target: str | int = int(user) if user.isdigit() else user
+        entity = await ctx.client.get_input_entity(target)
+        input_users.append(entity)
+        resolved.append({"user": user, "input_type": type(entity).__name__})
+
+    result = {
+        "success": True,
+        "action": "delete_contacts",
+        "dry_run": dry_run,
+        "user_count": len(normalized_users),
+        "users": normalized_users,
+        "resolved": resolved,
+        "action_hash": action_hash,
+        "confirmation_text_required": (
+            CONFIRMATION_PHRASE if REQUIRE_CONFIRMATION_TEXT else None
+        ),
+    }
+    if approval_meta:
+        result.update(approval_meta)
+    if dry_run:
+        return result
+
+    if not force_resend:
+        duplicate, retry_after_sec = _check_recent_duplicate(action_hash)
+        if duplicate:
+            return {
+                "success": False,
+                "duplicate_blocked": True,
+                "retry_after_sec": retry_after_sec,
+                "action_hash": action_hash,
+                "error": "Duplicate action blocked by idempotency window. "
+                "Set force_resend=true to override.",
+            }
+
+    from telethon.tl.functions.contacts import DeleteContactsRequest
+
+    await ctx.client(DeleteContactsRequest(id=input_users))
+    _mark_action_executed(action_hash)
+    result["dry_run"] = False
+    return result
+
+
+@mcp.tool()
+async def tg_delete_contacts_by_phones(
+    phones: list[str],
+    dry_run: bool = True,
+    confirm: bool = False,
+    confirmation_text: str = "",
+    approval_code: str = "",
+    force_resend: bool = False,
+) -> dict:
+    """Delete saved/imported Telegram contacts by exact phone numbers."""
+    normalized_phones = []
+    seen = set()
+    for raw in phones or []:
+        digits = "".join(ch for ch in str(raw or "") if ch.isdigit())
+        if not digits or digits in seen:
+            continue
+        seen.add(digits)
+        normalized_phones.append(digits)
+    if not normalized_phones:
+        return _blocked("phones list is empty")
+
+    blocked_targets = []
+    for phone in normalized_phones:
+        allowed, error = _check_target_allowed(phone)
+        if not allowed:
+            blocked_targets.append({"phone": phone, "error": error})
+    if blocked_targets:
+        return _blocked(
+            "one or more phones are not in allowlist", blocked_targets=blocked_targets
+        )
+
+    if SAFE_STARTUP_BLOCK_REASON:
+        return _blocked(SAFE_STARTUP_BLOCK_REASON)
+    if not ACTIONS_ENABLED:
+        return _blocked("Actions are disabled. Set TG_ACTIONS_ENABLED=1.")
+    if not dry_run and not confirm:
+        return _blocked(
+            "Execution blocked: set confirm=true to run destructive action. "
+            "Use dry_run=true to preview safely."
+        )
+    ok, err = _validate_confirmation_text(confirmation_text, dry_run=dry_run)
+    if not ok:
+        return _blocked(err or "confirmation_text validation failed")
+
+    action_hash = _hash_payload(
+        {
+            "action": "delete_contacts_by_phones",
+            "phones": sorted(normalized_phones),
+        }
+    )
+    approval_ok, approval_error, approval_meta = _approval_gate(
+        action_hash=action_hash,
+        dry_run=dry_run,
+        approval_code=approval_code,
+    )
+    if not approval_ok:
+        return _blocked(approval_error or "approval gate blocked")
+
+    result = {
+        "success": True,
+        "action": "delete_contacts_by_phones",
+        "dry_run": dry_run,
+        "phone_count": len(normalized_phones),
+        "phones": normalized_phones,
+        "action_hash": action_hash,
+        "confirmation_text_required": (
+            CONFIRMATION_PHRASE if REQUIRE_CONFIRMATION_TEXT else None
+        ),
+    }
+    if approval_meta:
+        result.update(approval_meta)
+    if dry_run:
+        return result
+
+    if not force_resend:
+        duplicate, retry_after_sec = _check_recent_duplicate(action_hash)
+        if duplicate:
+            return {
+                "success": False,
+                "duplicate_blocked": True,
+                "retry_after_sec": retry_after_sec,
+                "action_hash": action_hash,
+                "error": "Duplicate action blocked by idempotency window. "
+                "Set force_resend=true to override.",
+            }
+
+    await ctx.get_manager()
+    from telethon.tl.functions.contacts import DeleteByPhonesRequest
+
+    api_result = await ctx.client(DeleteByPhonesRequest(phones=normalized_phones))
+    _mark_action_executed(action_hash)
+    result["dry_run"] = False
+    result["api_result"] = bool(api_result)
     return result
 
 
@@ -2359,6 +3982,20 @@ async def tg_get_actions_policy() -> dict[str, Any]:
     """Return active action policy gates and limits."""
     limiter_stats = get_rate_limiter().get_stats()
     session_path_status = ctx.session_path_status()
+    now = int(time.time())
+
+    def _lane_counts(state: dict[str, Any]) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for lane_id, lane in state.items():
+            if not isinstance(lane, dict):
+                continue
+            _refresh_lane_status(lane, now)
+            state[str(lane_id)] = lane
+            status = str(lane.get("status") or "unknown")
+            counts[status] = counts.get(status, 0) + 1
+        return counts
+
+    lane_status_counts = update_json_dict(LANE_FILE, _lane_counts, root_key="lanes")
     return {
         "server_profile": "actions",
         "actions_enabled": ACTIONS_ENABLED,
@@ -2380,6 +4017,15 @@ async def tg_get_actions_policy() -> dict[str, Any]:
         "batch_default_ttl_hours": BATCH_DEFAULT_TTL_HOURS,
         "batch_approval_lease_sec": BATCH_APPROVAL_LEASE_SEC,
         "batch_run_lease_sec": BATCH_RUN_LEASE_SEC,
+        "write_lane_file": str(LANE_FILE),
+        "write_lane_status_counts": lane_status_counts,
+        "write_lane_max_ttl_sec": LANE_MAX_TTL_SEC,
+        "write_lane_approval_ttl_sec": LANE_APPROVAL_TTL_SEC,
+        "write_lane_max_targets": LANE_MAX_TARGETS,
+        "write_lane_max_messages": LANE_MAX_MESSAGES,
+        "write_lane_min_interval_sec": LANE_MIN_INTERVAL_SEC,
+        "write_lane_send_lock_sec": LANE_SEND_LOCK_SEC,
+        "write_lane_audit_max_records": LANE_AUDIT_MAX_RECORDS,
         "unsafe_override": UNSAFE_OVERRIDE,
         "unsafe_policy_issues": UNSAFE_POLICY_ISSUES,
         "safe_startup_block_reason": SAFE_STARTUP_BLOCK_REASON,
@@ -2411,6 +4057,13 @@ async def tg_get_actions_policy() -> dict[str, Any]:
             "3) Repeat the matching run tool until completed.",
             "4) If lease expires, re-run tg_approve_batch and continue.",
         ],
+        "recommended_write_lane_flow": [
+            "1) Create immutable scope with tg_create_write_lane.",
+            "2) Show targets, purpose, TTL, quotas, link policy, and approval_code.",
+            "3) Call tg_approve_write_lane once with exact confirmation_text + approval_code.",
+            "4) A monitor may call tg_send_message_with_lane(dry_run=false) only inside scope.",
+            "5) Call tg_revoke_write_lane at any time; expiry and quotas fail closed.",
+        ],
     }
 
 
@@ -2432,4 +4085,11 @@ async def tg_auth_status() -> dict:
 
 
 if __name__ == "__main__":
-    mcp.run(transport="stdio")
+    # Transport is env-selectable so one shared HTTP instance can serve many MCP
+    # clients: the actions profile claims the Telegram session exclusively, so a
+    # stdio copy per client makes every client after the first fail to start.
+    _transport = os.environ.get("TG_MCP_TRANSPORT", "stdio")
+    if _transport != "stdio":
+        mcp.settings.host = os.environ.get("TG_MCP_HTTP_HOST", "127.0.0.1")
+        mcp.settings.port = int(os.environ.get("TG_MCP_HTTP_PORT", "8787"))
+    mcp.run(transport=_transport)

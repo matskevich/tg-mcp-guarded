@@ -24,9 +24,30 @@ def test_read_request_detection_for_get():
     assert tele_client._is_telethon_write_request(req) is False
 
 
+def test_cross_dc_read_transport_auth_is_not_classified_as_write():
+    for request_name in ("ExportAuthorizationRequest", "ImportAuthorizationRequest"):
+        req = _dummy_request("telethon.tl.functions.auth", request_name)
+        assert tele_client._is_telethon_write_request(req) is False
+
+
+def test_other_export_import_requests_remain_classified_as_write():
+    for request_name in ("ExportChatInviteRequest", "ImportChatInviteRequest"):
+        req = _dummy_request("telethon.tl.functions.messages", request_name)
+        assert tele_client._is_telethon_write_request(req) is True
+
+
+def test_bot_callback_answer_is_write_like_even_with_get_prefix():
+    req = _dummy_request(
+        "telethon.tl.functions.messages", "GetBotCallbackAnswerRequest"
+    )
+    assert tele_client._is_telethon_write_request(req) is True
+
+
 def test_batch_write_detection():
     read_req = _dummy_request("telethon.tl.functions.messages", "GetCommonChatsRequest")
-    write_req = _dummy_request("telethon.tl.functions.messages", "DeleteChatUserRequest")
+    write_req = _dummy_request(
+        "telethon.tl.functions.messages", "DeleteChatUserRequest"
+    )
     assert tele_client._contains_telethon_write_request([read_req, write_req]) is True
 
 
@@ -125,7 +146,9 @@ def test_get_client_disables_updates_loop_by_default(monkeypatch, tmp_path):
     assert captured["kwargs"]["receive_updates"] is False
 
 
-def test_describe_session_target_uses_runtime_copy_for_existing_session(monkeypatch, tmp_path):
+def test_describe_session_target_uses_runtime_copy_for_existing_session(
+    monkeypatch, tmp_path
+):
     source = tmp_path / "example_account_ro.session"
     source.write_text("seed", encoding="utf-8")
 
@@ -137,7 +160,9 @@ def test_describe_session_target_uses_runtime_copy_for_existing_session(monkeypa
     assert target["mode"] == "copy"
     assert target["source_session_file"] == str(source.resolve())
     assert target["effective_session_file"] != str(source.resolve())
-    assert target["effective_session_file"].startswith(str((tmp_path / "runtime").resolve()))
+    assert target["effective_session_file"].startswith(
+        str((tmp_path / "runtime").resolve())
+    )
 
 
 def test_get_client_for_session_uses_runtime_copy_when_enabled(monkeypatch, tmp_path):

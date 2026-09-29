@@ -44,6 +44,11 @@ async def main() -> int:
         default=180,
         help="QR login wait timeout in seconds (default: 180)",
     )
+    parser.add_argument(
+        "--terminal-qr",
+        action="store_true",
+        help="render the login token as a scannable terminal QR without printing its URL",
+    )
     args = parser.parse_args()
 
     session_path = (PROJECT_ROOT / args.session_dir / args.session_name).resolve()
@@ -60,9 +65,18 @@ async def main() -> int:
             return 0
 
         qr_login = await client.qr_login()
-        print("scan this qr login url in Telegram app:")
-        print(qr_login.url)
-        print()
+        if args.terminal_qr:
+            import qrcode
+
+            qr = qrcode.QRCode(border=2)
+            qr.add_data(qr_login.url)
+            qr.make(fit=True)
+            print("scan this qr in the Telegram app:")
+            qr.print_ascii(invert=True)
+        else:
+            print("scan this qr login url in Telegram app:")
+            print(qr_login.url)
+            print()
         print("where to scan:")
         print("  Telegram -> Settings -> Devices -> Link Desktop Device")
         print(f"waiting up to {args.timeout_sec}s...")

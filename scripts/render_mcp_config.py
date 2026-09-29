@@ -9,19 +9,24 @@ import sys
 from pathlib import Path
 
 
-def _build_read_server(
+def _common_env(
     repo: Path,
-    server_name: str,
     session_name: str,
+    read_session_name: str,
     actions_session_name: str,
     expected_username: str = "",
 ) -> dict:
-    read_session_path = str((repo / f"data/sessions/{session_name}.session").resolve())
-    actions_session_path = str((repo / f"data/sessions/{actions_session_name}.session").resolve())
+    read_session_path = str(
+        (repo / f"data/sessions/{read_session_name}.session").resolve()
+    )
+    actions_session_path = str(
+        (repo / f"data/sessions/{actions_session_name}.session").resolve()
+    )
     env = {
         "PYTHONPATH": f"{(repo / 'tganalytics').resolve()}:{repo.resolve()}",
         "TG_SESSIONS_DIR": str((repo / "data/sessions").resolve()),
-        "TG_SESSION_PATH": read_session_path,
+        "TG_SESSION_PATH": str(repo / f"data/sessions/{session_name}.session"),
+        "TG_ENV_FILE": str(repo / ".env"),
         "TG_READ_SESSION_PATH": read_session_path,
         "TG_ACTIONS_SESSION_PATH": actions_session_path,
         "TG_SESSION_PATH_CONFLICT_MODE": "warn",
@@ -33,9 +38,6 @@ def _build_read_server(
         "TG_ALLOW_DIRECT_TELETHON_WRITE": "0",
         "TG_ENFORCE_ACTION_PROCESS": "1",
         "TG_DIRECT_TELETHON_WRITE_ALLOWED_CONTEXTS": "actions_mcp",
-        "TG_WRITE_CONTEXT": "read_mcp",
-        "TG_ACTION_PROCESS": "0",
-        "TG_SESSION_RUNTIME_MODE": "copy",
         "TG_RECEIVE_UPDATES": "0",
         "TG_SESSION_LOCK_MODE": "shared",
         "TG_GLOBAL_RPS_MODE": "shared",
@@ -45,13 +47,38 @@ def _build_read_server(
     if expected_username:
         env["TG_EXPECTED_USERNAME"] = expected_username
 
+    return env
+
+
+def _server(repo: Path, profile: str, server_name: str, env: dict) -> dict:
+    # keep the venv symlink: resolving it selects the base python without its packages.
     return {
         server_name: {
-            "command": str((repo / "venv/bin/python3").resolve()),
-            "args": [str((repo / "tganalytics/mcp_server_read.py").resolve())],
+            "command": str(repo / "venv/bin/python3"),
+            "args": [str(repo / f"tganalytics/mcp_server_{profile}.py")],
             "env": env,
         }
     }
+
+
+def _build_read_server(
+    repo: Path,
+    server_name: str,
+    session_name: str,
+    actions_session_name: str,
+    expected_username: str = "",
+) -> dict:
+    env = _common_env(
+        repo, session_name, session_name, actions_session_name, expected_username
+    )
+    env.update(
+        {
+            "TG_WRITE_CONTEXT": "read_mcp",
+            "TG_ACTION_PROCESS": "0",
+            "TG_SESSION_RUNTIME_MODE": "copy",
+        }
+    )
+    return _server(repo, "read", server_name, env)
 
 
 def _build_actions_server(
@@ -61,69 +88,51 @@ def _build_actions_server(
     read_session_name: str,
     expected_username: str = "",
 ) -> dict:
-    actions_session_path = str((repo / f"data/sessions/{session_name}.session").resolve())
-    read_session_path = str((repo / f"data/sessions/{read_session_name}.session").resolve())
-    env = {
-        "PYTHONPATH": f"{(repo / 'tganalytics').resolve()}:{repo.resolve()}",
-        "TG_SESSIONS_DIR": str((repo / "data/sessions").resolve()),
-        "TG_SESSION_PATH": actions_session_path,
-        "TG_READ_SESSION_PATH": read_session_path,
-        "TG_ACTIONS_SESSION_PATH": actions_session_path,
-        "TG_SESSION_PATH_CONFLICT_MODE": "warn",
-        "TG_SESSION_CONFLICT_REGISTRY_FILE": str(
-            (repo / "data/anti_spam/session_registry.json").resolve()
-        ),
-        "TG_ALLOW_SESSION_SWITCH": "0",
-        "TG_ACTIONS_ENABLED": "1",
-        "TG_ACTIONS_REQUIRE_ALLOWLIST": "1",
-        "TG_ACTIONS_ALLOWED_GROUPS": "",
-        "TG_ACTIONS_MAX_MESSAGE_LEN": "2000",
-        "TG_ACTIONS_MAX_FILE_MB": "20",
-        "TG_ACTIONS_REQUIRE_CONFIRMATION_TEXT": "1",
-        "TG_ACTIONS_CONFIRMATION_PHRASE": "",
-        "TG_ACTIONS_MIN_CONFIRM_TEXT_LEN": "6",
-        "TG_ACTIONS_REQUIRE_APPROVAL_CODE": "1",
-        "TG_ACTIONS_APPROVAL_TTL_SEC": "1800",
-        "TG_ACTIONS_APPROVAL_MIN_AGE_SEC": "30",
-        "TG_ACTIONS_APPROVAL_FILE": str((repo / "data/anti_spam/action_approvals.json").resolve()),
-        "TG_ACTIONS_IDEMPOTENCY_ENABLED": "1",
-        "TG_ACTIONS_IDEMPOTENCY_WINDOW_SEC": "86400",
-        "TG_ACTIONS_IDEMPOTENCY_FILE": str(
-            (repo / "data/anti_spam/action_idempotency.json").resolve()
-        ),
-        "TG_ACTIONS_BATCH_FILE": str((repo / "data/anti_spam/action_batches.json").resolve()),
-        "TG_ACTIONS_BATCH_TTL_HOURS": "168",
-        "TG_ACTIONS_BATCH_APPROVAL_LEASE_SEC": "86400",
-        "TG_ACTIONS_BATCH_RUN_LEASE_SEC": "1800",
-        "TG_ACTIONS_UNSAFE_OVERRIDE": "0",
-        "TG_BLOCK_DIRECT_TELETHON_WRITE": "1",
-        "TG_ALLOW_DIRECT_TELETHON_WRITE": "0",
-        "TG_ENFORCE_ACTION_PROCESS": "1",
-        "TG_DIRECT_TELETHON_WRITE_ALLOWED_CONTEXTS": "actions_mcp",
-        "TG_WRITE_CONTEXT": "actions_mcp",
-        "TG_ACTION_PROCESS": "1",
-        "TG_RECEIVE_UPDATES": "0",
-        "TG_SESSION_LOCK_MODE": "shared",
-        "TG_GLOBAL_RPS_MODE": "shared",
-        "TG_FLOOD_CIRCUIT_THRESHOLD_SEC": "300",
-        "TG_FLOOD_CIRCUIT_COOLDOWN_SEC": "900",
-        "MAX_GROUP_MSGS_PER_DAY": "30",
-    }
-    if expected_username:
-        env["TG_EXPECTED_USERNAME"] = expected_username
-
-    return {
-        server_name: {
-            "command": str((repo / "venv/bin/python3").resolve()),
-            "args": [str((repo / "tganalytics/mcp_server_actions.py").resolve())],
-            "env": env,
+    env = _common_env(
+        repo, session_name, read_session_name, session_name, expected_username
+    )
+    env.update(
+        {
+            "TG_ACTIONS_ENABLED": "1",
+            "TG_ACTIONS_REQUIRE_ALLOWLIST": "1",
+            "TG_ACTIONS_ALLOWED_GROUPS": "",
+            "TG_ACTIONS_MAX_MESSAGE_LEN": "2000",
+            "TG_ACTIONS_MAX_FILE_MB": "20",
+            "TG_ACTIONS_REQUIRE_CONFIRMATION_TEXT": "1",
+            "TG_ACTIONS_CONFIRMATION_PHRASE": "",
+            "TG_ACTIONS_MIN_CONFIRM_TEXT_LEN": "6",
+            "TG_ACTIONS_REQUIRE_APPROVAL_CODE": "1",
+            "TG_ACTIONS_APPROVAL_TTL_SEC": "1800",
+            "TG_ACTIONS_APPROVAL_MIN_AGE_SEC": "30",
+            "TG_ACTIONS_APPROVAL_FILE": str(
+                (repo / "data/anti_spam/action_approvals.json").resolve()
+            ),
+            "TG_ACTIONS_IDEMPOTENCY_ENABLED": "1",
+            "TG_ACTIONS_IDEMPOTENCY_WINDOW_SEC": "86400",
+            "TG_ACTIONS_IDEMPOTENCY_FILE": str(
+                (repo / "data/anti_spam/action_idempotency.json").resolve()
+            ),
+            "TG_ACTIONS_BATCH_FILE": str(
+                (repo / "data/anti_spam/action_batches.json").resolve()
+            ),
+            "TG_ACTIONS_BATCH_TTL_HOURS": "168",
+            "TG_ACTIONS_BATCH_APPROVAL_LEASE_SEC": "86400",
+            "TG_ACTIONS_BATCH_RUN_LEASE_SEC": "1800",
+            "TG_ACTIONS_LANE_FILE": str(repo / "data/anti_spam/action_lanes.json"),
+            "TG_ACTIONS_UNSAFE_OVERRIDE": "0",
+            "TG_WRITE_CONTEXT": "actions_mcp",
+            "TG_ACTION_PROCESS": "1",
+            "MAX_GROUP_MSGS_PER_DAY": "30",
         }
-    }
+    )
+    return _server(repo, "actions", server_name, env)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repo", required=True, help="Absolute path to tg-mcp repository")
+    parser.add_argument(
+        "--repo", required=True, help="Absolute path to tg-mcp repository"
+    )
     parser.add_argument(
         "--profile",
         choices=("read", "full"),
@@ -144,7 +153,9 @@ def main() -> int:
 
     repo = Path(args.repo).expanduser().resolve()
     servers = {}
-    read_session_path = str((repo / f"data/sessions/{args.read_session_name}.session").resolve())
+    read_session_path = str(
+        (repo / f"data/sessions/{args.read_session_name}.session").resolve()
+    )
     actions_session_path = str(
         (repo / f"data/sessions/{args.actions_session_name}.session").resolve()
     )

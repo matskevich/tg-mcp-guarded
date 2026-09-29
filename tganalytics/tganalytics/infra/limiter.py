@@ -32,6 +32,7 @@ try:
 except Exception:  # pragma: no cover
     fcntl = None
 
+from .paths import data_path, resolve_state_path
 from .metrics import (
     increment_flood_wait_events_total,
     increment_rate_limit_requests_total,
@@ -147,7 +148,7 @@ class RateLimiter:
         max_joins_per_day: int = 20,
         max_group_msgs_per_day: int = 30,
         max_groups: int = 200,
-        data_dir: str = "data/anti_spam",
+        data_dir: str | None = None,
         global_rps_mode: str = "shared",
         flood_circuit_threshold_sec: int = 300,
         flood_circuit_cooldown_sec: int = 900,
@@ -159,7 +160,7 @@ class RateLimiter:
             max_joins_per_day: Максимум join/leave в сутки
             max_group_msgs_per_day: Максимум сообщений в группы/каналы в сутки
             max_groups: Максимум групп для аккаунта
-            data_dir: Директория для хранения счетчиков
+            data_dir: Директория для счетчиков (по умолчанию <repo>/data/anti_spam)
             global_rps_mode: shared|local|off
             flood_circuit_threshold_sec: FLOOD_WAIT threshold to trip circuit breaker
             flood_circuit_cooldown_sec: cooldown duration once circuit is tripped
@@ -170,7 +171,7 @@ class RateLimiter:
         self.max_group_msgs_per_day = int(max_group_msgs_per_day)
         self.max_groups = int(max_groups)
 
-        self.data_dir = Path(data_dir)
+        self.data_dir = resolve_state_path(data_dir or "", "anti_spam")
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
         self.counter_file = self.data_dir / "daily_counters.txt"
@@ -679,7 +680,7 @@ async def smart_pause(operation_type: str, count: int = 1):
 
 def setup_safe_logging():
     """Настройка логирования с тегом SAFE для мониторинга"""
-    log_dir = Path("data/logs")
+    log_dir = data_path("logs")
     log_dir.mkdir(parents=True, exist_ok=True)
 
     formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")

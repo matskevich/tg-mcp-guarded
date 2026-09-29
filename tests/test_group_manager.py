@@ -371,7 +371,7 @@ async def test_get_messages_supports_direct_user_dialog(
                 reply_to=None,
                 views=None,
                 forwards=None,
-                is_pinned=False,
+                pinned=True,
             )
         ]
     )
@@ -382,6 +382,7 @@ async def test_get_messages_supports_direct_user_dialog(
     assert len(result) == 1
     assert result[0]["id"] == 1
     assert result[0]["text"] == "hello"
+    assert result[0]["is_pinned"] is True
     mock_telegram_client.iter_messages.assert_called_once_with(
         mock_user,
         limit=10,
@@ -739,3 +740,64 @@ async def test_send_file_invalid_target(mock_telegram_client):
     group_manager = GroupManager(mock_telegram_client)
     result = await group_manager.send_file("x", "/tmp/example.md")
     assert result is False
+
+
+@pytest.mark.asyncio
+async def test_download_media_falls_back_to_peer_history(
+    mock_telegram_client, mock_user, tmp_path
+):
+    """DM media remains downloadable when Telegram ids= lookup returns None."""
+    from tests.conftest import AsyncIteratorMock
+
+    message = SimpleNamespace(id=1926493, media=object())
+    expected_path = str(tmp_path / "photo.jpg")
+    mock_telegram_client.get_entity.return_value = mock_user
+    mock_telegram_client.get_messages = AsyncMock(return_value=None)
+    mock_telegram_client.iter_messages.return_value = AsyncIteratorMock([message])
+    mock_telegram_client.download_media = AsyncMock(return_value=expected_path)
+
+    group_manager = GroupManager(mock_telegram_client)
+    result = await group_manager.download_media("test_user", message.id, str(tmp_path))
+
+    assert result == expected_path
+    mock_telegram_client.iter_messages.assert_called_once_with(mock_user, limit=500)
+    mock_telegram_client.download_media.assert_awaited_once_with(message, str(tmp_path))
+
+
+@pytest.mark.asyncio
+async def test_download_media_prefers_exact_lookup(
+    mock_telegram_client, mock_user, tmp_path
+):
+    """The normal exact-ID path should not scan peer history."""
+    message = SimpleNamespace(id=42, media=object())
+    expected_path = str(tmp_path / "photo.jpg")
+    mock_telegram_client.get_entity.return_value = mock_user
+    mock_telegram_client.get_messages = AsyncMock(return_value=message)
+    mock_telegram_client.download_media = AsyncMock(return_value=expected_path)
+
+    group_manager = GroupManager(mock_telegram_client)
+    result = await group_manager.download_media("test_user", message.id, str(tmp_path))
+
+    assert result == expected_path
+    mock_telegram_client.iter_messages.assert_not_called()
+    mock_telegram_client.download_media.assert_awaited_once_with(message, str(tmp_path))
+
+
+@pytest.mark.asyncio
+async def test_download_media_returns_none_when_peer_history_has_no_match(
+    mock_telegram_client, mock_user, tmp_path
+):
+    """A peer-scoped miss must not download unrelated media."""
+    from tests.conftest import AsyncIteratorMock
+
+    unrelated = SimpleNamespace(id=41, media=object())
+    mock_telegram_client.get_entity.return_value = mock_user
+    mock_telegram_client.get_messages = AsyncMock(return_value=None)
+    mock_telegram_client.iter_messages.return_value = AsyncIteratorMock([unrelated])
+    mock_telegram_client.download_media = AsyncMock()
+
+    group_manager = GroupManager(mock_telegram_client)
+    result = await group_manager.download_media("test_user", 42, str(tmp_path))
+
+    assert result is None
+    mock_telegram_client.download_media.assert_not_awaited()
