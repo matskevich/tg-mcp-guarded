@@ -10,6 +10,9 @@ FAKE_SERVER = r"""
 import json
 import os
 import sys
+import time
+
+preview_time = None
 
 for raw in sys.stdin:
     raw = raw.strip()
@@ -53,19 +56,24 @@ for raw in sys.stdin:
             }
         elif name == "tg_send_message":
             if args.get("dry_run") is True:
+                preview_time = time.monotonic()
                 body = {
                     "success": True,
                     "approval_code": "abc123",
                     "message_text": args.get("message_text"),
                 }
+                if os.environ.get("BRIDGE_TEST_PREVIEW_POLICY") == "1":
+                    body["confirmation_text_required"] = "confirm-from-preview"
+                    body["approval_min_age_sec"] = 0.05
             else:
                 body = {
-                    "success": True,
+                    "success": os.environ.get("BRIDGE_TEST_EXECUTION_FAIL") != "1",
                     "confirm": args.get("confirm"),
                     "approval_code": args.get("approval_code"),
                     "confirmation_text": args.get("confirmation_text"),
                     "dry_run": args.get("dry_run"),
                     "message_text": args.get("message_text"),
+                    "elapsed_since_preview": time.monotonic() - preview_time,
                 }
         else:
             body = {"error": f"unknown tool {name}"}
@@ -169,3 +177,65 @@ def test_bridge_write_call_runs_preview_then_confirm(tmp_path):
     assert payload["execution"]["confirmation_text"] == "confirm-test-action"
     assert payload["execution"]["dry_run"] is False
     assert payload["execution"]["message_text"] == "hello"
+
+
+def test_bridge_uses_preview_policy_when_runtime_env_is_hidden(tmp_path):
+    server = _write_fake_server(tmp_path)
+    config = tmp_path / "config.toml"
+    config.write_text(
+        f'[mcp_servers.tgmcp_actions]\ncommand = "{sys.executable}"\n'
+        f'args = ["{server}"]\n',
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--config",
+            str(config),
+            "--set-env",
+            "BRIDGE_TEST_PREVIEW_POLICY=1",
+            "write-call",
+            "tg_send_message",
+            "--args-json",
+            '{"group":"@self","message_text":"hello"}',
+            "--approval-wait-sec",
+            "0",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["execution"]["confirmation_text"] == "confirm-from-preview"
+    assert payload["execution"]["elapsed_since_preview"] >= 0.05
+
+
+def test_bridge_returns_failure_when_execution_is_blocked(tmp_path):
+    server = _write_fake_server(tmp_path)
+    config = _write_config(tmp_path, server)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--config",
+            str(config),
+            "--set-env",
+            "BRIDGE_TEST_EXECUTION_FAIL=1",
+            "write-call",
+            "tg_send_message",
+            "--args-json",
+            '{"group":"@self","message_text":"hello"}',
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    payload = json.loads(result.stdout)
+    assert payload["execution"]["success"] is False
