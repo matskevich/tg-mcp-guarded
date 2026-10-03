@@ -314,8 +314,29 @@ def run_write_call(
     if not approval_code:
         raise BridgeError("Dry run did not return approval_code.")
 
+    required_text = preview.get("confirmation_text_required")
+    if not confirmation_text and isinstance(required_text, str):
+        confirmation_text = required_text
+    if not confirmation_text:
+        raise BridgeError(
+            "Dry run did not provide confirmation text. Set --confirmation-text."
+        )
+    if (
+        isinstance(required_text, str)
+        and required_text
+        and confirmation_text != required_text
+    ):
+        raise BridgeError("Confirmation text does not match dry-run requirement.")
+
+    execute_after = preview.get("approval_execute_after_ts")
+    if isinstance(execute_after, (int, float)) and not isinstance(execute_after, bool):
+        approval_wait_sec = max(approval_wait_sec, float(execute_after) - time.time())
+    else:
+        min_age = preview.get("approval_min_age_sec")
+        if isinstance(min_age, (int, float)) and not isinstance(min_age, bool):
+            approval_wait_sec = max(approval_wait_sec, float(min_age))
     if approval_wait_sec > 0:
-        time.sleep(approval_wait_sec)
+        time.sleep(approval_wait_sec + 0.25)
 
     execute_args = dict(arguments)
     execute_args["dry_run"] = False
@@ -382,12 +403,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     write_parser.add_argument(
         "--confirmation-text",
-        help="Exact confirmation_text to use; defaults to TG_ACTIONS_CONFIRMATION_PHRASE",
+        help="Exact confirmation_text; defaults to env, then dry-run preview",
     )
     write_parser.add_argument(
         "--approval-wait-sec",
         default="auto",
-        help="Wait before execute: 'auto', '0', or explicit seconds",
+        help="Wait before execute: 'auto', '0', or seconds; never undercuts dry-run minimum",
     )
     return parser
 
@@ -436,14 +457,8 @@ def main(argv: list[str] | None = None) -> int:
             elif args.command == "write-call":
                 confirmation_text = (
                     args.confirmation_text
-                    or str(
-                        env.get("TG_ACTIONS_CONFIRMATION_PHRASE", "")
-                    ).strip()
+                    or str(env.get("TG_ACTIONS_CONFIRMATION_PHRASE", "")).strip()
                 )
-                if not confirmation_text:
-                    raise BridgeError(
-                        "No confirmation text available. Set --confirmation-text or env."
-                    )
                 payload = run_write_call(
                     client,
                     tool_name=args.tool_name,
@@ -463,6 +478,16 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     print(json.dumps(payload, ensure_ascii=False, indent=2))
+    if args.command == "write-call" and isinstance(payload, dict):
+        preview = payload.get("preview")
+        execution = payload.get("execution")
+        if (
+            not isinstance(preview, dict)
+            or preview.get("success") is False
+            or not isinstance(execution, dict)
+            or execution.get("success") is False
+        ):
+            return 1
     return 0
 
 
