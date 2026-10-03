@@ -29,7 +29,7 @@ If any check fails, stop write execution and report policy mismatch.
 1. Preview:
 - call write tool with `dry_run=true`
 - capture `approval_code` and `action_hash`
-2. Ask user for explicit confirmation phrase in current thread.
+2. Confirm the user authorized this exact target and payload; clarify ambiguous or high-impact actions. The backend confirmation phrase is a process guard, not user authorization.
 3. Execute same payload:
 - `dry_run=false`
 - `confirm=true`
@@ -43,7 +43,8 @@ If any check fails, stop write execution and report policy mismatch.
 Fallback when native ActionMCP tools are missing in the current thread:
 - use `python3 scripts/tg_action_bridge.py tools` to verify shell-side bridge access
 - use `python3 scripts/tg_action_bridge.py write-call ...` for write tools
-- the bridge still talks to `mcp_server_actions.py` over MCP/JSON-RPC and keeps allowlist/approval/confirm gates
+- the bridge reads the required phrase and minimum approval age from the dry-run preview when wrapper-injected env is hidden, waits before confirming, and returns a nonzero exit code if execution is blocked
+- the bridge still talks to `mcp_server_actions.py` over MCP/JSON-RPC and keeps allowlist/approval/confirm gates; it does not establish user authority
 
 ## 4. Canonical Write Flow (Batch Mission)
 
