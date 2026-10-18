@@ -28,6 +28,8 @@ Route every Telegram client call through `_safe_api_call`/`safe_call` and verify
 - Duplicate write actions are blocked by idempotency window unless `force_resend=true`.
 - For multi-step migrations, prefer batch flow: `tg_create_add_member_batch` -> `tg_approve_batch` -> `tg_run_add_member_batch`.
 - Agent onboarding docs:
+- `docs/AGENT_START.md` for the bootstrap prompt, portable skills and readiness criteria
+- `docs/RECIPES.md` for bounded reads, delivery read-back, assistant voice and media workflows
 - `docs/AGENT_PLAYBOOK.md` for canonical agent execution flows
 - `docs/ACTION_POLICY_TOGGLES.md` for safe env toggles and allowlist changes
 

@@ -1,6 +1,6 @@
 # tg-mcp (tg-mcp-guarded)
 
-[хендоф и установка на своём аккаунте](docs/HANDOFF.md) · обновление 2026-09-29
+[начать агенту: промпт, скиллы и примеры](docs/AGENT_START.md) · [установка на своём аккаунте](docs/HANDOFF.md)
 
 MCP server + Python library for Telegram API with built-in rate limiting, anti-spam protection, and session management.
 
@@ -110,7 +110,7 @@ TG_SECRET_CMD_API_HASH="pass tg/api_hash"
 
 ## Agent Onboarding
 
-Start here if this repository will be used by other AI agents/operators:
+start with [the agent entrypoint](docs/AGENT_START.md): one bootstrap prompt, four adaptable skills, a private operator profile and readiness checks. [recipes](docs/RECIPES.md) cover bounded reading, verified sending, assistant voice, voice notes and bot buttons.
 
 - [Agent Playbook](docs/AGENT_PLAYBOOK.md) - execution flows, error handling, batch workflow
 - [Action Policy Toggles](docs/ACTION_POLICY_TOGGLES.md) - what can be toggled and safe change procedure

@@ -2,6 +2,8 @@
 
 This guide is for AI agents and operators who need to work with `tg-mcp` quickly and safely.
 
+new operator: start with [the bootstrap prompt and skill pack](AGENT_START.md). use [recipes](RECIPES.md) for concrete tool calls, delivery receipts, assistant voice and voice notes. copied skills must point to the operator's own private profile and repository.
+
 ## 1. Mental Model
 
 - `tgmcp-read`: analytics and discovery only (`tg_get_*`, `tg_get_messages_since`, `tg_list_sessions`, `tg_resolve_username`, etc.).
@@ -12,38 +14,38 @@ This guide is for AI agents and operators who need to work with `tg-mcp` quickly
 
 ## 2. First 60 Seconds Checklist
 
-1. Call `tg_get_actions_policy` on `tgmcp-actions`.
-2. Verify:
+1. discover the tools exposed by your configured read server; call `tg_auth_status` and compare the actual account with your operator profile. stop on mismatch. `TG_EXPECTED_USERNAME` is the automated guard; numeric id requires an explicit agent-side comparison in this version.
+2. for a read-only installation, read five dialogs through `tg_get_my_dialogs(limit=5)` and continue with a bounded task. actions is optional.
+3. when actions is connected, verify its `tg_auth_status` reports the same owner id, then call `tg_get_actions_policy` on that server. verify:
 - `actions_enabled=true`
 - `safe_startup_block_reason=null`
 - `require_allowlist=true`
 - `require_confirmation_text=true`
 - `require_approval_code=true`
 - `idempotency_enabled=true`
-3. Confirm target group is present in `allowed_targets` (or update allowlist and restart Action MCP).
+4. confirm the exact authorized target is present in `allowed_targets`. if it is missing, prepare a mission-scoped configuration change within owner authority; never disable the allowlist to complete a task.
 
 If any check fails, stop write execution and report policy mismatch.
 
 ## 3. Canonical Write Flow (Single Action)
 
-1. Preview:
-- call write tool with `dry_run=true`
-- capture `approval_code` and `action_hash`
-2. Ask user for explicit confirmation phrase in current thread.
-3. Execute same payload:
+1. verify owner authority for the exact target and payload. a direct ordinary send request with known content is sufficient one-action authority; the backend phrase is a process guard. ask only for missing scope or a consequential choice. capture the latest message id as a read-back watermark.
+2. preview with `dry_run=true`; retain `approval_code`, `action_hash` and the exact required process confirmation text.
+3. wait until `approval_execute_after_ts` (or the returned minimum age). if the server still reports a fresh code, wait the remaining interval.
+4. execute the same payload:
 - `dry_run=false`
 - `confirm=true`
 - exact `confirmation_text`
-- `approval_code` from step 1
-4. Respect approval min-age:
-- if server returns "approval_code is too fresh", wait required seconds and retry execute
+- `approval_code` from step 2
 5. If duplicate blocked:
 - wait for window or use `force_resend=true` only if user explicitly asked to resend.
+6. read back the new message in the same verified peer and compare the exact payload and sender. preserve the message id and action hash. `success=true` alone is not a delivery receipt; see the [watermark-based flow](RECIPES.md#отправить-конкретный-текст-и-получить-receipt). never infer that the recipient read, accepted or paid from a successful send.
 
 Fallback when native ActionMCP tools are missing in the current thread:
 - use `python3 scripts/tg_action_bridge.py tools` to verify shell-side bridge access
 - use `python3 scripts/tg_action_bridge.py write-call ...` for write tools
 - the bridge still talks to `mcp_server_actions.py` over MCP/JSON-RPC and keeps allowlist/approval/confirm gates
+- this version's `auto` wait reads bridge env; explicitly pass the policy minimum age and exact configured phrase when server wrappers hide env. inspect json success fields, not only exit status. see [the fallback recipe](RECIPES.md#отправить-конкретный-текст-и-получить-receipt).
 
 ## 4. Canonical Write Flow (Batch Mission)
 
@@ -73,7 +75,7 @@ limited time. Reads and scheduling remain separate: the heartbeat checks chats t
 1. Create an inert scope with `tg_create_write_lane(name, purpose, targets, ttl_sec,
    max_messages, max_messages_per_target, min_interval_sec, max_message_len,
    allow_links=false)`.
-2. Show the complete returned scope to the user. Ask for the exact confirmation phrase.
+2. verify owner authority covers the complete returned target/purpose/ttl/quota envelope. if already explicitly granted, satisfy the configured process confirmation internally. otherwise ask for the missing consequential grant; do not use the backend phrase as a substitute for scope authorization.
 3. Activate once with `tg_approve_write_lane(lane_id, confirmation_text,
    approval_code)`.
 4. For each proposed reply, call `tg_send_message_with_lane(..., dry_run=true)` when
@@ -94,7 +96,7 @@ deletes, member actions and new targets use the normal approval flows.
 - `Actions are disabled`: stop and ask operator to set `TG_ACTIONS_ENABLED=1`.
 - `allowed groups is empty`: ask operator to set `TG_ACTIONS_ALLOWED_GROUPS`.
 - `Target is not in allowlist`: ask operator to add explicit target and restart server.
-- `confirmation_text must be exactly ...`: request exact phrase from user.
+- `confirmation_text must be exactly ...`: use the exact configured phrase from policy/preview when the action is already authorized; ask the owner only if authority or required configuration is actually missing.
 - `approval_code is required/expired`: re-run same call with `dry_run=true` first.
 - `Duplicate action blocked`: do not retry blindly; ask before `force_resend=true`.
 - `batch is already running by another worker`: wait for run lease or retry later.
@@ -111,7 +113,7 @@ deletes, member actions and new targets use the normal approval flows.
 
 ## 8. Multi-Project Usage
 
-- Shared session is supported with `TG_SESSION_LOCK_MODE=shared`.
+- `TG_SESSION_LOCK_MODE=shared` controls the local file lock; it does not remove sqlite write contention. use separate read/actions session files and per-process runtime copies where configured. two session files still authorize the same full telegram account; the read boundary is enforced by mcp.
 - Shared RPS/circuit state is supported with common `data/anti_spam` and `TG_GLOBAL_RPS_MODE=shared`.
 - Recommended for production:
 - separate read/actions sessions by default

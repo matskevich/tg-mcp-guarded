@@ -4,6 +4,8 @@
 
 репозиторий: [matskevich/tg-mcp-guarded](https://github.com/matskevich/tg-mcp-guarded).
 
+чтобы поручить настройку своему агенту, передайте ему [один входной промпт](AGENT_START.md). там же — четыре шаблона скиллов, приватный профиль оператора и критерии готовности; [практические примеры](RECIPES.md) показывают работу с перепиской, отправкой, голосом ассистента и голосовыми.
+
 ## что вошло в обновление 2026-09-29
 
 - временные разрешения на текстовые отправки: конкретные чаты, срок, часы активности, квоты, ограничения ссылок и немедленный отзыв;
@@ -31,7 +33,7 @@ make setup-dirs
 cp .env.sample .env
 ```
 
-в `.env` заполните `TG_API_ID`, `TG_API_HASH` и `TG_EXPECTED_USERNAME` своим username без `@`. для аккаунта без username используйте `TG_EXPECTED_USER_ID`.
+в `.env` заполните `TG_API_ID`, `TG_API_HASH` и `TG_EXPECTED_USERNAME` своим username без `@`. автоматический account guard этой версии проверяет username. для аккаунта без username агент должен сам сверять `account.id` из `tg_auth_status` с ожидаемым id в приватном профиле при начале работы и после смены/перезапуска сервера: `TG_EXPECTED_USER_ID` сейчас не обрабатывается guard и не заменяет эту проверку.
 
 создайте свою сессию чтения:
 
@@ -61,7 +63,7 @@ python scripts/render_mcp_config.py \
 2. повторите генерацию с `--profile full --read-session-name my_read --actions-session-name my_actions` и тем же своим username.
 3. в локальном блоке `tgmcp-actions.env` укажите только нужные чаты в `TG_ACTIONS_ALLOWED_GROUPS` и свою фразу в `TG_ACTIONS_CONFIRMATION_PHRASE`. пустой список закрывает запись.
 4. проверьте конфигурацию: `python scripts/check_session_paths.py --config .mcp.local.json`.
-5. вызовите `tg_auth_status` и `tg_get_actions_policy` на сервере действий. перед отправкой используйте `dry_run=true`, затем тот же запрос с `confirm=true`, точным `confirmation_text` и полученным `approval_code`. минимальное ожидание — по умолчанию 30 секунд.
+5. вызовите `tg_auth_status` на обоих серверах, сверьте owner id, затем `tg_get_actions_policy` на сервере действий. перед разрешённой отправкой используйте `dry_run=true`, дождитесь `approval_execute_after_ts`, затем тот же запрос с `confirm=true`, точным `confirmation_text` и полученным `approval_code`. минимальное ожидание — по умолчанию 30 секунд. после отправки нужен точный read-back: [сценарий и receipt](RECIPES.md#отправить-конкретный-текст-и-получить-receipt).
 
 временное разрешение создаётся через `tg_create_write_lane`, активируется через `tg_approve_write_lane` и отзывается через `tg_revoke_write_lane`. оно ограничено текстовыми сообщениями. файлы, удаления, изменения состава и новые адресаты требуют отдельных подтверждений. [подробности](TIME_BOUNDED_WRITE_LANES.md).
 
