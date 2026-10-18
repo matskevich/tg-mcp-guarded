@@ -48,7 +48,8 @@ use explicit status for every requested item:
 
 - `transcribed`: a fresh transcript was produced and inspected.
 - `cached`: an existing transcript was matched to this source and reused.
-- `media_unprocessed`: media is present but has not been successfully transcribed.
+- `media_unprocessed`: the requested media has not been successfully transcribed;
+  say whether it was downloaded, is inaccessible or has not yet been retrieved.
 - `text_only`: this source has no audio/video attachment; only its text was read.
 
 retain source peer/message ids and a local artifact or cache reference. distinguish
