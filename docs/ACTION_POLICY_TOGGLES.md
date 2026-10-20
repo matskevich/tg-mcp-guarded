@@ -43,6 +43,18 @@ Action MCP is fail-closed: if baseline is weakened, writes are auto-blocked unle
 | `TG_SESSION_LOCK_MODE` | `shared` | `exclusive` | strict one-process-per-session |
 | `TG_GLOBAL_RPS_MODE` | `shared` | `local` | isolated throttling per project |
 
+## Contextual reply budgets
+
+Text replies to a server-verified recent incoming human message use a separate local budget. See `ANTISPAM_SECURITY.md` for qualification, attempt accounting and review criteria.
+
+| Variable | Initial value | Meaning |
+|---|---|---|
+| `MAX_CONVERSATION_REPLIES_PER_DAY` | `100` | shared daily attempted replies; `0` blocks this class |
+| `MAX_CONVERSATION_REPLIES_PER_TARGET` | `20` | attempted replies to one resolved user per UTC day |
+| `CONVERSATION_REPLY_MIN_INTERVAL_SEC` | `10` | minimum interval for one user |
+
+These are owner-adjustable operational bounds, not Telegram limits. They never waive authorization, recipient verification, lane limits, FloodWait or circuit breakers. Never erase state or rotate accounts to get around a real Telegram restriction.
+
 ## Safe Change Procedure
 
 1. Change env values in Action MCP config.

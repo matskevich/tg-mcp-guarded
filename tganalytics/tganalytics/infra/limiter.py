@@ -33,6 +33,7 @@ except Exception:  # pragma: no cover
     fcntl = None
 
 from .paths import data_path, resolve_state_path
+from .reply_budget import ReplyBudget, LocalQuotaExceeded
 from .metrics import (
     increment_flood_wait_events_total,
     increment_rate_limit_requests_total,
@@ -509,6 +510,7 @@ class RateLimiter:
             "dm_usage": f"{current.get('dm_count', 0)}/{self.max_dm_per_day}",
             "join_usage": f"{current.get('join_count', 0)}/{self.max_joins_per_day}",
             "group_msg_usage": f"{current.get('group_msg_count', 0)}/{self.max_group_msgs_per_day}",
+            "conversation_reply_budget": ReplyBudget(self.data_dir).stats(),
             "api_calls": current.get("api_calls", 0),
             "flood_waits": current.get("flood_waits", 0),
             "current_rps": self.rps,
@@ -552,6 +554,7 @@ async def safe_call(
     *args,
     max_retries: int = 3,
     operation_type: str = "api",
+    operation_target_id: int | None = None,
     timeout: float = 30.0,
     **kwargs,
 ) -> Any:
@@ -569,20 +572,22 @@ async def safe_call(
     limiter = get_rate_limiter()
     await limiter.check_circuit_breaker()
 
-    if operation_type == "dm":
+    if operation_type == "conversation_reply":
+        ReplyBudget(limiter.data_dir).reserve(operation_target_id)
+    elif operation_type == "dm":
         if not await limiter.check_dm_quota():
-            raise Exception(
+            raise LocalQuotaExceeded(
                 f"[SAFE] DM quota exceeded: {limiter.daily_counters.get('dm_count', 0)}/{limiter.max_dm_per_day}"
             )
     elif operation_type == "join":
         if not await limiter.check_join_quota():
-            raise Exception(
+            raise LocalQuotaExceeded(
                 "[SAFE] Join quota exceeded: "
                 f"{limiter.daily_counters.get('join_count', 0)}/{limiter.max_joins_per_day}"
             )
     elif operation_type == "group_msg":
         if not await limiter.check_group_msg_quota():
-            raise Exception(
+            raise LocalQuotaExceeded(
                 "[SAFE] Group message quota exceeded: "
                 f"{limiter.daily_counters.get('group_msg_count', 0)}/{limiter.max_group_msgs_per_day}"
             )

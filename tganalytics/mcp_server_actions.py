@@ -57,6 +57,7 @@ from tganalytics.domain.bot_workflow import (  # noqa: E402
     public_button_options as _public_button_options,
     select_button_option as _select_button_option,
 )
+from tganalytics.infra.reply_budget import LocalQuotaExceeded
 from tganalytics.infra.paths import resolve_state_path  # noqa: E402
 
 from tganalytics.infra.limiter import get_rate_limiter, safe_call  # noqa: E402
@@ -1848,7 +1849,12 @@ async def tg_send_message(
             }
 
     manager = await ctx.get_manager()
-    sent = await manager.send_message(group, clean_text)
+    try:
+        sent = await manager.send_message(group, clean_text)
+    except LocalQuotaExceeded as exc:
+        return {"success": False, "target": group, "action_hash": action_hash,
+                "error_code": "local_quota_exceeded", "error": str(exc),
+                "sent": False}
     if sent:
         _mark_action_executed(action_hash)
         return {
@@ -4037,6 +4043,7 @@ async def tg_get_actions_policy() -> dict[str, Any]:
         "enforce_action_process": os.environ.get("TG_ENFORCE_ACTION_PROCESS", "1")
         == "1",
         "group_msg_usage": limiter_stats.get("group_msg_usage"),
+        "conversation_reply_budget": limiter_stats.get("conversation_reply_budget"),
         "circuit_breaker": limiter_stats.get("circuit_breaker"),
         "destructive_actions_require_confirm": True,
         "default_dry_run_for_member_actions": True,
