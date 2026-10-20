@@ -1,7 +1,7 @@
 from .bot_workflow import message_button_options, public_button_options
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
 from telethon import TelegramClient
@@ -13,6 +13,7 @@ from telethon.errors.rpcerrorlist import (
 from telethon.tl.types import Channel, Chat, User
 
 from tganalytics.infra.limiter import safe_call, smart_pause
+from tganalytics.infra.reply_budget import LocalQuotaExceeded
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -85,7 +86,9 @@ def _is_testing_environment():
     )
 
 
-async def _safe_api_call(func, *args, operation_type: str = "api", **kwargs):
+async def _safe_api_call(
+    func, *args, operation_type: str = "api", operation_target_id=None, **kwargs
+):
     """Helper для условного использования safe_call в зависимости от окружения"""
     if _is_testing_environment():
         # В тестах используем прямые вызовы для совместимости с моками
@@ -97,7 +100,10 @@ async def _safe_api_call(func, *args, operation_type: str = "api", **kwargs):
         # В продакшене используем safe_call для анти-спам защиты
         func_name = func.__name__ if hasattr(func, "__name__") else "function"
         logger.debug(f"[PROD] Calling {func_name} via safe_call")
-        return await safe_call(func, operation_type=operation_type, *args, **kwargs)
+        return await safe_call(
+            func, *args, operation_type=operation_type,
+            operation_target_id=operation_target_id, **kwargs
+        )
 
 
 class GroupManager:
@@ -1686,6 +1692,21 @@ class GroupManager:
             "remove_old_user": remove_result,
         }
 
+    async def _is_recent_conversation(self, entity) -> bool:
+        """Server-observed inbound within seven days; no caller-supplied bypass flag."""
+        if not isinstance(entity, User) or entity.bot or entity.is_self:
+            return False
+        messages = await _safe_api_call(self.client.get_messages, entity, limit=20)
+        now = datetime.now(timezone.utc)
+        for message in messages:
+            date = getattr(message, "date", None)
+            if (getattr(message, "out", None) is False
+                    and getattr(message, "sender_id", None) == entity.id
+                    and isinstance(date, datetime) and date.tzinfo is not None
+                    and 0 <= (now - date).total_seconds() <= 7 * 86400):
+                return True
+        return False
+
     async def send_message(
         self, group_identifier: Union[str, int], message_text: str
     ) -> bool:
@@ -1702,17 +1723,21 @@ class GroupManager:
         try:
             entity = await self._resolve_target_entity(group_identifier)
 
-            # Отправляем сообщение через safe_call с антиспам защитой
+            is_reply = await self._is_recent_conversation(entity)
+            # Preserve all transport controls; only the local budget differs.
             await _safe_api_call(
                 self.client.send_message,
                 entity,
                 message_text,
-                operation_type="group_msg",
+                operation_type="conversation_reply" if is_reply else "group_msg",
+                operation_target_id=entity.id if is_reply else None,
             )
 
             logger.info(f"Сообщение успешно отправлено в группу {group_identifier}")
             return True
 
+        except LocalQuotaExceeded:
+            raise
         except Exception as e:
             logger.error(
                 f"Ошибка при отправке сообщения в группу {group_identifier}: {e}"
