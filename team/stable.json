@@ -39,5 +39,13 @@
     "tganalytics/tganalytics/infra/tele_client.py": "1ebe3b723c4c459529f46f1093cd1ec96ac7fee5863d52275f116466b9ffaab8"
   },
   "guide": "https://raw.githubusercontent.com/matskevich/tg-mcp-guarded/main/team/start.md",
-  "update_policy": "daily check plus preflight before telegram work; preserve credentials and sessions; verify after update"
+  "update_policy": "daily check plus preflight before telegram work; preserve credentials and sessions; verify after update",
+  "scope": "gconf personal sales only",
+  "global_skill_version": "2026-10-22.1",
+  "global_skill_source": "https://github.com/matskevich/tg-mcp-guarded/tree/main/team/gconf-personal-sales-telegram",
+  "global_skill_files": {
+    "SKILL.md": "84b12b90982d1a9575eb78443ec29083cf413416e9137231bca288ad4cccc75c",
+    "references/voice.md": "18a32da2624629a2ca8f55b7e68420025c1638fcead3da0247dced60f70217b3",
+    "references/patterns.md": "0c97fd909e22e12de98e03093fb47302284ac3cfd44ef3f57c78ca4382abf017"
+  }
 }

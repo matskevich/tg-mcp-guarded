@@ -30,6 +30,11 @@ def inspect(operator, project, channel):
                   if not (runtime / name).is_file()
                   or (runtime / name).is_symlink()
                   or hashlib.sha256((runtime / name).read_bytes()).hexdigest() != expected]
+    skill = Path.home() / '.codex/skills/gconf-personal-sales-telegram'
+    skill_hashes = channel.get('global_skill_files', {})
+    skill_mismatches = [name for name, expected in skill_hashes.items()
+                        if not (skill / name).is_file()
+                        or hashlib.sha256((skill / name).read_bytes()).hexdigest() != expected]
     try:
         remote = subprocess.check_output(['git', '-C', str(project), 'remote', 'get-url', 'origin'],
                                          text=True, stderr=subprocess.DEVNULL).strip()
@@ -51,6 +56,9 @@ def inspect(operator, project, channel):
             installed[lane] = bool(row and str(runtime) in json.dumps(row))
     return {'operator': operator, 'channel': CHANNEL, 'channel_version': channel['version'],
             'runtime_matches_owner_release': not mismatches, 'mismatched_files': mismatches,
+            'scope': 'gconf personal sales only',
+            'global_skill_matches_release': bool(skill_hashes) and not skill_mismatches,
+            'global_skill_mismatched_files': skill_mismatches,
             'project_origin_verified': project_ok, 'project_path': str(project),
             'subscription_registered': subscribed, 'daily_check_file': plist.exists(),
             'daily_check_loaded': loaded, 'mcp_config_points_to_runtime': installed,
@@ -68,7 +76,8 @@ def main():
         request = urllib.request.Request(CHANNEL, headers={'Cache-Control': 'no-cache'})
         channel = json.loads(urllib.request.urlopen(request, timeout=20).read())
         assert channel['repository'] == 'matskevich/tg-mcp-guarded'
-        assert all(not Path(p).is_absolute() and '..' not in Path(p).parts for p in channel['runtime_files'])
+        assert all(not Path(p).is_absolute() and '..' not in Path(p).parts
+                   for p in [*channel['runtime_files'], *channel.get('global_skill_files', {})])
     except Exception as error:
         write_json(root / 'update-status.json', {'channel_check': 'unavailable', 'error_type': type(error).__name__})
         raise SystemExit('channel check unavailable; do not claim current version')
@@ -100,7 +109,8 @@ def main():
     report = inspect(args.operator, args.project.resolve(), channel)
     write_json(root / 'update-status.json', report)
     print(json.dumps(report, ensure_ascii=False))
-    if not report['runtime_matches_owner_release'] or not report['project_origin_verified']:
+    if (not report['runtime_matches_owner_release'] or not report['project_origin_verified']
+            or not report['global_skill_matches_release']):
         raise SystemExit(10)
 
 
