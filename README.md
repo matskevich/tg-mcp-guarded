@@ -2,6 +2,9 @@
 
 [начать агенту: промпт, скиллы и примеры](docs/AGENT_START.md) · [установка на своём аккаунте](docs/HANDOFF.md)
 
+[персональные продажи gconf: scoped skill и обновления](team/gconf-personal-sales-telegram/SKILL.md)
+
+
 MCP server + Python library for Telegram API with built-in rate limiting, anti-spam protection, and session management.
 
 Dual-plane Telegram MCP: read-only analytics + guarded write actions with anti-spam and block-risk controls.

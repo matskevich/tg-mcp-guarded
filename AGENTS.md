@@ -35,3 +35,8 @@ Route every Telegram client call through `_safe_api_call`/`safe_call` and verify
 
 ## Commit & Pull Request Guidelines
 We use lightweight Conventional Commits (`feat:`, `fix:`, `refactor:`) and granular commits aid review. A pull request should link issues, note risk/rollout, attach `make test` + audit output, and include logs or screenshots for MCP-visible changes. Update docs/tests when behavior shifts, mention env changes up front, and wait for both CI workflows (CI + Anti-spam Compliance) before requesting review.
+
+
+## персональные продажи gconf
+
+при подключении команды gconf к её sales-аккаунту начни с `team/gconf-personal-sales-telegram/SKILL.md` и `team/start.md`. установи scoped global skill для обнаружения из рабочих чатов, проверь подписку runtime и skill через `team/stable.json`; сохраняй работающие сессии. этот маршрут не применяется к личной переписке, отдельному support-аккаунту или остальным проектам. обычные переносимые шаблоны `skills/` и `docs/RECIPES.md` уже включены в пакет.
