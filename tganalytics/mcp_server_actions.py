@@ -1021,6 +1021,59 @@ def _create_leave_dialog_batch_record(
 
 
 @mcp.tool()
+async def tg_migrate_basic_group(
+    group: str,
+    expected_title: str,
+    dry_run: bool = True,
+    confirm: bool = False,
+    confirmation_text: str = "",
+    approval_code: str = "",
+) -> dict:
+    """Irreversibly upgrade an exact basic group to a private supergroup.
+
+    Does not change members, permissions, allowlists or automation targets.
+    Always reconcile an uncertain result before another attempt.
+    """
+    if not (group.startswith("-") and group[1:].isdigit()) or not expected_title.strip():
+        return _blocked("Exact negative group ID and expected_title required")
+    allowed, error = _check_action_preconditions(
+        group, dry_run=dry_run, confirm=confirm, confirmation_text=confirmation_text
+    )
+    if not allowed:
+        return _blocked(error or "preconditions failed")
+    action_hash = _hash_payload({"action": "migrate_basic_group", "target": group,
+                                 "expected_title": expected_title})
+    ok, error, meta = _approval_gate(action_hash=action_hash, dry_run=dry_run,
+                                     approval_code=approval_code)
+    if not ok:
+        return _blocked(error or "approval blocked")
+    if not dry_run:
+        duplicate, retry = _check_recent_duplicate(action_hash)
+        if duplicate:
+            return {"success": False, "duplicate_blocked": True,
+                    "retry_after_sec": retry, "error": "Reconcile prior migration; no forced retry."}
+    manager = await ctx.get_manager()
+    try:
+        # Validate permissions before reserving an irreversible execution.
+        preview = await manager.migrate_basic_group(group, expected_title, dry_run=True)
+        if not preview.get("success"):
+            return preview
+        if dry_run:
+            result = preview
+        else:
+            _mark_action_executed(action_hash)
+            result = await manager.migrate_basic_group(group, expected_title, dry_run=False)
+    except Exception as exc:
+        return {"success": False, "error": str(exc), "dry_run": dry_run,
+                "reconciliation_required": not dry_run, "action_hash": action_hash}
+    if dry_run and meta:
+        result.update(meta)
+    result["action_hash"] = action_hash
+    result["confirmation_text_required"] = CONFIRMATION_PHRASE if REQUIRE_CONFIRMATION_TEXT else None
+    return result
+
+
+@mcp.tool()
 async def tg_create_private_group(
     title: str,
     users: list[str] | None = None,
