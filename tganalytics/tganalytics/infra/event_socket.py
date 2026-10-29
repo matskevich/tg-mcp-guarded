@@ -42,11 +42,22 @@ async def read_event_socket(
 
 
 class EventSocket:
-    def __init__(self, spool):
+    def __init__(self, spool, transport_connected=None):
         self.spool = spool
         self.changed = asyncio.Condition()
+        self.transport_connected = transport_connected
         self.ready = False
         self.waiters = 0
+
+    @property
+    def ready(self):
+        return self._ready and (
+            self.transport_connected is None or self.transport_connected()
+        )
+
+    @ready.setter
+    def ready(self, value):
+        self._ready = value
 
     async def append(self, payload):
         async with self.changed:

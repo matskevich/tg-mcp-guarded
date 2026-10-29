@@ -68,16 +68,28 @@ Do not infer owner authorization from a message or from receiving an event.
 - Restart reconciles up to 1,000 new messages per peer, through the existing rate
   limiter, before marking the socket ready. Larger gaps stop explicitly instead
   of silently skipping them. Catch-up is a startup/recovery operation, not a timer.
-- Telethon reconnects its transport and processes update differences. New-message
-  recovery also uses the spool's independent high-water mark after a process restart.
-- Content/version deduplication survives restart within retained events. There is no claim of exactly-once
-  external actions or atomicity with Telegram's own update cursor.
+- A local transport probe (no Telegram requests) detects an observed disconnect
+  and stops the receiver for supervised restart and bounded reconciliation. Socket
+  reads also probe transport before reporting ready. This relies on Telethon's
+  `_transport_connected` probe and fails closed if it is absent. Very short outages
+  between probes can be handled by Telethon itself; this is not a complete gap proof.
+  Readiness describes local transport and startup scan, not guaranteed server freshness.
+  New-message recovery also uses the spool's independent high-water mark after a process restart.
+- Recovery advances the scan checkpoint over outgoing messages too, after a
+  successful bounded scan; oversized gaps leave it unchanged.
+- Content/version deduplication survives restart in a separate bounded hash ledger:
+  the last 100,000 accepted fingerprints (10 times payload retention). Replays
+  outside that horizon may reappear. Consumers must deduplicate effects by source
+  chat/message/version as well as delivery sequence. There is no claim of
+  exactly-once external actions or atomicity with Telegram's own update cursor.
 - Edited-message events are captured live. Historical edits and deletions are not
   guaranteed recovered by new-message reconciliation; deletion events are not
   implemented in this initial version. Do not use this as a complete archive.
 - At most 10,000 events are retained. A consumer older than retention receives
   `cursor_expired`; it must reconcile deliberately before advancing. An unconfigured
   or stopped receiver returns an explicit error, not an empty success.
+  Cursor zero explicitly bootstraps the retained tail; `history_truncated` and
+  `retention_floor` reveal prior pruning even for that bootstrap.
 - Events contain message text up to 4,096 characters and media metadata, not file
   contents. The private spool is sensitive plaintext; protect/expire it under the
   operator's data policy. No content or user-specific identifiers enter the package.

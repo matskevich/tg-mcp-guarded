@@ -140,3 +140,81 @@ async def test_restart_reconciles_without_replaying_bootstrap(tmp_path):
     await receiver.reconcile(client, spool, {10}, safe)
     assert spool.read(0)["events"][0]["message_id"] == 21
     spool.close()
+
+
+def test_dedupe_outlives_payload_retention_and_restart(tmp_path):
+    path = tmp_path / "events.sqlite3"
+    spool = EventSpool(path, 1, {10}, max_events=2)
+    for mid in range(1, 4):
+        spool.append(payload(mid))
+    spool.close()
+    spool = EventSpool(path, 1, {10}, max_events=2)
+    assert not spool.append(payload(1))
+    result = spool.read(0)
+    assert result["history_truncated"]
+    assert result["retention_floor"] > 0
+    for mid in range(4, 30):
+        spool.append(payload(mid))
+    assert spool.db.execute("SELECT COUNT(*) FROM seen").fetchone()[0] == 20
+    assert spool.db.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 2
+    spool.close()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_advances_over_outgoing_and_does_not_advance_on_gap(tmp_path):
+    spool = EventSpool(tmp_path / "events.sqlite3", 1, {10})
+    spool.seed(10, 1)
+    client = SimpleNamespace(
+        get_messages=AsyncMock(return_value=[SimpleNamespace(id=2, out=True)])
+    )
+
+    async def safe(fn, *args, **kwargs):
+        kwargs.pop("operation_type", None)
+        return await fn(*args, **kwargs)
+
+    await receiver.reconcile(client, spool, {10}, safe)
+    assert spool.checkpoint(10) == 2
+    assert not spool.read(0)["events"]
+    client.get_messages = AsyncMock(
+        side_effect=[
+            [SimpleNamespace(id=i, out=True) for i in range(start, start + 100)]
+            for start in range(3, 1103, 100)
+        ]
+    )
+    with pytest.raises(RuntimeError, match="gap"):
+        await receiver.reconcile(client, spool, {10}, safe)
+    assert spool.checkpoint(10) == 2
+    spool.close()
+
+
+@pytest.mark.asyncio
+async def test_transport_loss_marks_unready_and_wakes_waiter(tmp_path):
+    spool = EventSpool(tmp_path / "events.sqlite3", 1, {10})
+    connected = True
+    client = SimpleNamespace(
+        _sender=SimpleNamespace(_transport_connected=lambda: connected)
+    )
+    service = EventSocket(spool, lambda: receiver.transport_connected(client))
+    service.ready = True
+    server = await service.start(tmp_path / "events.sock")
+    watcher = asyncio.create_task(
+        receiver.watch_transport(client, service, interval=0.01)
+    )
+    try:
+        waiter = asyncio.create_task(
+            read_event_socket(str(tmp_path / "events.sock"), timeout_seconds=2)
+        )
+        await asyncio.sleep(0.05)
+        connected = False
+        assert not service.ready
+        with pytest.raises(RuntimeError, match="transport_lost"):
+            await watcher
+        result = await asyncio.wait_for(waiter, 0.5)
+        assert result["receiver_ready"] is False
+        assert not receiver.transport_connected(SimpleNamespace())
+    finally:
+        watcher.cancel()
+        await asyncio.gather(watcher, return_exceptions=True)
+        server.close()
+        await server.wait_closed()
+        spool.close()

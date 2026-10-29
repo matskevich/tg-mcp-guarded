@@ -113,9 +113,29 @@ async def reconcile(client, spool, peers, safe_call):
             if not rows or len(rows) < 100:
                 break
             cursor = rows[-1].id
-        for message in found:
+        for message in sorted(found, key=lambda item: item.id):
             if not message.out:
                 spool.append(event_payload(message, peer))
+        if found:
+            spool.advance_checkpoint(peer, max(message.id for message in found))
+
+
+def transport_connected(client):
+    # is_connected() remains True during Telethon auto-reconnect. Use its
+    # transport probe, failing closed if a dependency update removes it.
+    probe = getattr(getattr(client, "_sender", None), "_transport_connected", None)
+    return bool(probe and probe())
+
+
+async def watch_transport(client, socket, interval=1):
+    # Local state only: no Telegram requests, history polling or model turns.
+    while True:
+        if not transport_connected(client):
+            async with socket.changed:
+                socket.ready = False
+                socket.changed.notify_all()
+            raise RuntimeError("transport_lost_restart_for_reconciliation")
+        await asyncio.sleep(interval)
 
 
 async def run(args):
@@ -133,8 +153,8 @@ async def run(args):
     with (args.state_dir / "receiver.lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         spool = EventSpool(args.state_dir / "events.sqlite3", args.account_id, peers)
-        socket = EventSocket(spool)
         client = get_client_for_session(str(session))
+        socket = EventSocket(spool, lambda: transport_connected(client))
         queue = asyncio.Queue(maxsize=5000)
         fatal = asyncio.Event()
 
@@ -175,22 +195,26 @@ async def run(args):
                     await socket.append(await queue.get())
 
             worker = asyncio.create_task(consume())
+            transport = asyncio.create_task(watch_transport(client, socket))
             failed = asyncio.create_task(fatal.wait())
             disconnected = asyncio.ensure_future(asyncio.shield(client.disconnected))
             try:
                 done, _ = await asyncio.wait(
-                    [worker, failed, disconnected], return_when=asyncio.FIRST_COMPLETED
+                    [worker, failed, disconnected, transport],
+                    return_when=asyncio.FIRST_COMPLETED,
                 )
                 if worker in done:
                     await worker
+                if transport in done:
+                    await transport
                 raise RuntimeError(
                     "receiver disconnected or overflowed; restart for reconciliation"
                 )
             finally:
-                for task in (worker, failed, disconnected):
+                for task in (worker, failed, disconnected, transport):
                     task.cancel()
                 await asyncio.gather(
-                    worker, failed, disconnected, return_exceptions=True
+                    worker, failed, disconnected, transport, return_exceptions=True
                 )
         finally:
             socket.ready = False

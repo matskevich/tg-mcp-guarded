@@ -26,6 +26,8 @@ class EventSpool:
             CREATE TABLE IF NOT EXISTS events (
                 seq INTEGER PRIMARY KEY AUTOINCREMENT, event_key TEXT UNIQUE NOT NULL,
                 payload TEXT NOT NULL, received REAL NOT NULL);
+            CREATE TABLE IF NOT EXISTS seen (
+                event_key TEXT PRIMARY KEY, seen_order INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS checkpoints (peer INTEGER PRIMARY KEY, message_id INTEGER);
         """)
         binding = json.dumps([account_id, sorted(peers)])
@@ -37,6 +39,8 @@ class EventSpool:
         self.db.execute(
             "INSERT OR IGNORE INTO meta VALUES ('stream_id', ?)", (str(uuid.uuid4()),)
         )
+        # Preserve the dedupe ledger when upgrading an existing spool.
+        self.db.execute("INSERT OR IGNORE INTO seen SELECT event_key,seq FROM events")
         self.db.commit()
         self.peers, self.max_events = peers, max_events
         self.stream_id = self.db.execute(
@@ -57,12 +61,26 @@ class EventSpool:
                 "INSERT OR IGNORE INTO checkpoints VALUES (?,?)", (peer, message_id)
             )
 
+    def advance_checkpoint(self, peer: int, message_id: int):
+        if peer not in self.peers:
+            raise ValueError("peer outside scope")
+        with self.db:
+            self.db.execute(
+                "INSERT INTO checkpoints VALUES (?,?) ON CONFLICT(peer) DO UPDATE SET "
+                "message_id=MAX(message_id, excluded.message_id)",
+                (peer, message_id),
+            )
+
     def append(self, payload: dict) -> bool:
         if payload["chat_id"] not in self.peers or payload.get("outgoing"):
             return False
         encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False)
         key = hashlib.sha256(encoded.encode()).hexdigest()
         with self.db:
+            if self.db.execute(
+                "SELECT 1 FROM seen WHERE event_key=?", (key,)
+            ).fetchone():
+                return False
             result = self.db.execute(
                 "INSERT OR IGNORE INTO events(event_key,payload,received) VALUES (?,?,?)",
                 (key, encoded, time.time()),
@@ -71,6 +89,13 @@ class EventSpool:
                 "INSERT INTO checkpoints VALUES (?,?) ON CONFLICT(peer) DO UPDATE SET "
                 "message_id=MAX(message_id, excluded.message_id)",
                 (payload["chat_id"], payload["message_id"]),
+            )
+            self.db.execute("INSERT INTO seen VALUES (?,?)", (key, result.lastrowid))
+            # Hash-only ledger outlives payloads, but remains bounded too.
+            self.db.execute(
+                "DELETE FROM seen WHERE event_key IN "
+                "(SELECT event_key FROM seen ORDER BY seen_order DESC LIMIT -1 OFFSET ?)",
+                (self.max_events * 10,),
             )
             # seq is never reset. A lagging consumer gets an explicit retention gap.
             boundary = self.db.execute(
@@ -109,6 +134,9 @@ class EventSpool:
         ).fetchall()
         return {
             "stream_id": self.stream_id,
+            "retention_floor": int(floor[0]) if floor else 0,
+            "history_truncated": bool(floor),
+            "dedupe_capacity": self.max_events * 10,
             "events": [dict(json.loads(p), seq=s) for s, p in rows],
             "next_cursor": rows[-1][0] if rows else after_seq,
             "latest_seq": high or 0,
