@@ -31,6 +31,22 @@ ctx = MCPServerContext(allow_session_switch=ALLOW_SESSION_SWITCH, server_profile
 
 
 @mcp.tool()
+async def tg_get_events(after_seq: int = 0, limit: int = 20, timeout_seconds: int = 0) -> dict:
+    """Read/wait on a local durable incoming-event stream, without polling Telegram.
+
+    Requires an independently authenticated event receiver and TG_EVENT_SOCKET.
+    Persist next_cursor only after processing. Reusing a cursor safely replays events.
+    No model, message sending, or implicit event receiver startup is performed.
+    """
+    from tganalytics.infra.event_socket import read_event_socket
+
+    path = os.environ.get("TG_EVENT_SOCKET", "").strip()
+    if not path:
+        return {"error": "event_receiver_not_configured"}
+    return await read_event_socket(path, after_seq, limit, timeout_seconds)
+
+
+@mcp.tool()
 async def tg_list_sessions() -> dict:
     """List available Telegram sessions in data/sessions/."""
     return await ctx.list_sessions()

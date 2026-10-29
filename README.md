@@ -19,6 +19,7 @@ Dual-plane Telegram MCP: read-only analytics + guarded write actions with anti-s
 - **Circuit breaker** — auto cooldown after long FLOOD_WAIT events
 - **Session security** — chmod 700/600 hardening for session files
 - **Data exporters** — participants, messages, groups, dialogs
+- **Optional incoming events** — [read-only push receiver](docs/EVENT_RECEIVER.md), durable local inbox and bounded MCP wait; no model or Telegram polling while idle
 
 ## Positioning
 
