@@ -207,3 +207,11 @@ shared RPS, `FLOOD_WAIT`, circuit breaker, account binding, allowlist, approval-
 область состояния: один аккаунт на каталог anti_spam, как и у прежнего limiter. разные аккаунты должны иметь разные каталоги. старые уже запущенные процессы используют прежний код до перезапуска; не смешивать их счётчики с доказательством применения новой политики.
 
 оценка через неделю: число заблокированных полезных ответов, количество собеседников, повторы одному адресату, `FLOOD_WAIT` и неизвестные результаты. 100/20/10 корректируются по этим данным и поручению владельца, не вслед за каждой ошибкой отправки. автоматическая адаптация и мониторинг не включены. для отката установить `MAX_CONVERSATION_REPLIES_PER_DAY=0` в новых процессах либо вернуть предыдущую версию кода; состояние и квоты не стирать.
+
+## Optional incoming event receiver
+
+The [event receiver](EVENT_RECEIVER.md) is read-only and uses a separately authenticated
+session, explicit account/peer scope, durable deduplication, bounded local waits and
+startup-only history reconciliation through `safe_call`. It does not change quotas,
+actions approvals or the normal MCP receive-updates defaults. No model calls occur
+in the receiver. Never treat a copied session file as independent authorization.

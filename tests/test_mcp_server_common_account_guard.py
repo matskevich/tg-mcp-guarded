@@ -112,6 +112,8 @@ def test_detect_live_session_conflict_same_profile_same_session(monkeypatch, tmp
         encoding="utf-8",
     )
     monkeypatch.setattr(common, "_is_pid_alive", lambda pid: int(pid) == 111)
+    # The synthetic PID may belong to a real non-MCP process on CI.
+    monkeypatch.setattr(common, "_process_command", lambda pid: "python mcp_server_read.py")
 
     issue = common._detect_live_session_conflict(
         registry_file,
