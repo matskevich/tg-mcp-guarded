@@ -55,6 +55,14 @@ Text replies to a server-verified recent incoming human message use a separate l
 
 These are owner-adjustable operational bounds, not Telegram limits. They never waive authorization, recipient verification, lane limits, FloodWait or circuit breakers. Never erase state or rotate accounts to get around a real Telegram restriction.
 
+for the owner's ongoing work conversations, set both
+`MAX_CONVERSATION_REPLIES_PER_DAY=unlimited` and
+`MAX_CONVERSATION_REPLIES_PER_TARGET=unlimited`. counters, the per-target pacing
+interval, idempotency and provider flood handling remain active. an unlimited
+ceiling is reported as `null`; `0` still denies this reply class, preserving
+existing restricted profiles. the default numeric ceilings stay unchanged for
+profiles that have not selected this operating policy.
+
 `MAX_GROUP_MSGS_PER_DAY=0` retains message accounting without a daily group-message
 cap. use this for an owner runtime whose operating policy removes that cap.
 positive values retain a local daily cap; negative values are invalid. this does
