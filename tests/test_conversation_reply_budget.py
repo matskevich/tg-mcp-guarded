@@ -34,6 +34,36 @@ def test_corrupt_budget_fails_closed(tmp_path):
         budget.reserve(123)
 
 
+def test_owner_unlimited_replies_keep_accounting_across_restart(tmp_path):
+    budget = ReplyBudget(tmp_path, total='unlimited', per_target='unlimited', interval=10)
+    for index in range(250):
+        budget.reserve(123, now=1000 + index * 11)
+
+    restored = ReplyBudget(tmp_path, total='unlimited', per_target='unlimited', interval=10)
+    stats = restored.stats(now=3740)
+    assert stats['used'] == 250
+    assert stats['limit'] is None
+    assert stats['per_target_limit'] is None
+    with pytest.raises(LocalQuotaExceeded, match='interval'):
+        restored.reserve(123, now=3740)
+    restored.reserve(123, now=3750)
+
+
+@pytest.mark.parametrize('total,per_target,error', [
+    ('unlimited', 2, 'per_target'),
+    (2, 'unlimited', 'daily'),
+    (0, 'unlimited', 'daily'),
+    ('unlimited', 0, 'per_target'),
+])
+def test_unlimited_preserves_other_limits_and_zero_deny(tmp_path, total, per_target, error):
+    budget = ReplyBudget(tmp_path, total=total, per_target=per_target, interval=0)
+    if total != 0 and per_target != 0:
+        budget.reserve(123, now=1000)
+        budget.reserve(123, now=1001)
+    with pytest.raises(LocalQuotaExceeded, match=error):
+        budget.reserve(123, now=1002)
+
+
 @pytest.mark.asyncio
 async def test_recent_incoming_qualifies_but_outgoing_does_not():
     client = AsyncMock()
