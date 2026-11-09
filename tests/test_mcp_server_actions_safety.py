@@ -1,4 +1,7 @@
 import os
+from types import SimpleNamespace
+
+import pytest
 
 os.environ.setdefault("TG_API_ID", "1")
 os.environ.setdefault("TG_API_HASH", "testhash")
@@ -133,3 +136,30 @@ def test_blocked_response_adds_next_step_for_approval_code():
     assert result["success"] is False
     assert "approval_code" in result["error"]
     assert "dry_run=true" in str(result.get("next_step", ""))
+
+
+@pytest.mark.asyncio
+async def test_policy_reuses_existing_authority_without_removing_process_gates(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(
+        actions,
+        "get_rate_limiter",
+        lambda: SimpleNamespace(get_stats=lambda: {}),
+    )
+    monkeypatch.setattr(
+        actions, "ctx", SimpleNamespace(session_path_status=lambda: {})
+    )
+    monkeypatch.setattr(actions, "LANE_FILE", tmp_path / "lanes.json")
+    monkeypatch.setattr(actions, "REQUIRE_CONFIRMATION_TEXT", True)
+    monkeypatch.setattr(actions, "REQUIRE_APPROVAL_CODE", True)
+    monkeypatch.setattr(actions, "REQUIRE_ALLOWLIST", True)
+
+    policy = await actions.tg_get_actions_policy()
+
+    assert policy["recommended_write_flow"][1] == (
+        "2) Verify existing user authorization covers this exact action; ask only if it does not."
+    )
+    assert policy["require_confirmation_text"] is True
+    assert policy["require_approval_code"] is True
+    assert policy["require_allowlist"] is True

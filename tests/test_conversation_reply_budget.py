@@ -56,7 +56,8 @@ async def test_recent_incoming_qualifies_but_outgoing_does_not():
 
 @pytest.mark.asyncio
 async def test_reply_survives_old_quota_but_keeps_circuit(tmp_path, monkeypatch):
-    rl = limiter.RateLimiter(data_dir=str(tmp_path), max_group_msgs_per_day=0)
+    rl = limiter.RateLimiter(data_dir=str(tmp_path), max_group_msgs_per_day=1)
+    await rl.increment_group_msg_counter()
     monkeypatch.setattr(limiter, '_rate_limiter', rl)
     fn = AsyncMock(return_value='sent')
     assert await limiter.safe_call(fn, operation_type='conversation_reply', operation_target_id=123) == 'sent'
@@ -82,7 +83,8 @@ async def test_reservation_kept_after_uncertain_send(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_real_manager_routes_reply_and_blocks_cold_send(tmp_path, monkeypatch):
     monkeypatch.setenv('TG_DISABLE_RATE_LIMIT_FOR_TESTS', '0')
-    rl = limiter.RateLimiter(data_dir=str(tmp_path), max_group_msgs_per_day=0)
+    rl = limiter.RateLimiter(data_dir=str(tmp_path), max_group_msgs_per_day=1)
+    await rl.increment_group_msg_counter()
     monkeypatch.setattr(limiter, '_rate_limiter', rl)
     client = AsyncMock()
     manager = GroupManager(client)

@@ -55,6 +55,13 @@ Text replies to a server-verified recent incoming human message use a separate l
 
 These are owner-adjustable operational bounds, not Telegram limits. They never waive authorization, recipient verification, lane limits, FloodWait or circuit breakers. Never erase state or rotate accounts to get around a real Telegram restriction.
 
+`MAX_GROUP_MSGS_PER_DAY=0` retains message accounting without a daily group-message
+cap. use this for an owner runtime whose operating policy removes that cap.
+positive values retain a local daily cap; negative values are invalid. this does
+not change conversation-reply budgets, action authorization, rate pacing or
+provider flood handling. an exhausted local counter does not revoke an accepted
+task or require the owner to repeat its authorization.
+
 ## Safe Change Procedure
 
 1. Change env values in Action MCP config.
