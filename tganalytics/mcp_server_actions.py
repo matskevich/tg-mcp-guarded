@@ -627,7 +627,7 @@ def _consume_approval(
             return (
                 False,
                 "Execution blocked: approval_code is too fresh right after dry_run. "
-                f"Wait {wait_sec}s and ask human to verify preview before execute.",
+                f"Wait {wait_sec}s and verify preview against existing user authorization before execute.",
             )
 
         state.pop(code, None)
@@ -4052,7 +4052,7 @@ async def tg_get_actions_policy() -> dict[str, Any]:
         "session_path_conflict": session_path_status.get("conflict"),
         "recommended_write_flow": [
             "1) Call write tool with dry_run=true to preview and get approval_code.",
-            "2) Ask user for exact confirmation_text phrase in this thread.",
+            "2) Verify existing user authorization covers this exact action; ask only if it does not.",
             "3) Execute same payload with confirm=true + confirmation_text + approval_code.",
             "4) Handle duplicate_blocked by waiting or using force_resend=true intentionally.",
         ],
