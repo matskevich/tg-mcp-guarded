@@ -159,7 +159,7 @@ class RateLimiter:
             rps: Запросов в секунду
             max_dm_per_day: Максимум DM в сутки
             max_joins_per_day: Максимум join/leave в сутки
-            max_group_msgs_per_day: Максимум сообщений в группы/каналы в сутки
+            max_group_msgs_per_day: Daily message cap; 0 retains accounting without a cap
             max_groups: Максимум групп для аккаунта
             data_dir: Директория для счетчиков (по умолчанию <repo>/data/anti_spam)
             global_rps_mode: shared|local|off
@@ -170,6 +170,8 @@ class RateLimiter:
         self.max_dm_per_day = int(max_dm_per_day)
         self.max_joins_per_day = int(max_joins_per_day)
         self.max_group_msgs_per_day = int(max_group_msgs_per_day)
+        if self.max_group_msgs_per_day < 0:
+            raise ValueError("daily message cap must be non-negative")
         self.max_groups = int(max_groups)
 
         self.data_dir = resolve_state_path(data_dir or "", "anti_spam")
@@ -457,7 +459,8 @@ class RateLimiter:
 
     async def check_group_msg_quota(self) -> bool:
         return self._with_counters_lock(
-            lambda counters: int(counters.get("group_msg_count", 0)) < self.max_group_msgs_per_day,
+            lambda counters: self.max_group_msgs_per_day == 0
+            or int(counters.get("group_msg_count", 0)) < self.max_group_msgs_per_day,
             persist=False,
         )
 
@@ -509,7 +512,8 @@ class RateLimiter:
             "date": current.get("date"),
             "dm_usage": f"{current.get('dm_count', 0)}/{self.max_dm_per_day}",
             "join_usage": f"{current.get('join_count', 0)}/{self.max_joins_per_day}",
-            "group_msg_usage": f"{current.get('group_msg_count', 0)}/{self.max_group_msgs_per_day}",
+            "group_msg_usage": f"{current.get('group_msg_count', 0)}/{self.max_group_msgs_per_day or 'unlimited'}",
+            "group_msg_daily_limit": self.max_group_msgs_per_day or None,
             "conversation_reply_budget": ReplyBudget(self.data_dir).stats(),
             "api_calls": current.get("api_calls", 0),
             "flood_waits": current.get("flood_waits", 0),
