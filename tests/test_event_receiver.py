@@ -67,6 +67,8 @@ async def test_wait_wakes_once_replays_cursor_and_times_out(tmp_path):
         assert not task.done()
         await service.append(payload())
         result = await task
+        assert result["account_id"] == 1
+        assert result["peer_ids"] == [10]
         assert len(result["events"]) == 1
         assert (await read_event_socket(str(path)))["events"] == result["events"]
         assert not (await read_event_socket(str(path), result["next_cursor"]))["events"]
@@ -86,6 +88,31 @@ async def test_missing_receiver_and_invalid_request(tmp_path):
     ] == "event_receiver_unavailable"
     with pytest.raises(ValueError):
         await read_event_socket("unused", timeout_seconds=51)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_wait_does_not_raise_in_receiver(tmp_path):
+    spool = EventSpool(tmp_path / "events.sqlite3", 1, {10})
+    service = EventSocket(spool)
+    service.ready = True
+    path = tmp_path / "events.sock"
+    server = await service.start(path)
+    loop = asyncio.get_running_loop()
+    errors = []
+    previous = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _loop, context: errors.append(context))
+    try:
+        pending = asyncio.create_task(read_event_socket(str(path), timeout_seconds=1))
+        await asyncio.sleep(0.05)
+        pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)
+        await asyncio.sleep(1.1)
+        assert not errors
+    finally:
+        loop.set_exception_handler(previous)
+        server.close()
+        await server.wait_closed()
+        spool.close()
 
 
 def test_configure_refuses_shared_session_and_forces_guards(tmp_path, monkeypatch):

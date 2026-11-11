@@ -42,6 +42,7 @@ class EventSpool:
         # Preserve the dedupe ledger when upgrading an existing spool.
         self.db.execute("INSERT OR IGNORE INTO seen SELECT event_key,seq FROM events")
         self.db.commit()
+        self.account_id = account_id
         self.peers, self.max_events = peers, max_events
         self.stream_id = self.db.execute(
             "SELECT value FROM meta WHERE key='stream_id'"
