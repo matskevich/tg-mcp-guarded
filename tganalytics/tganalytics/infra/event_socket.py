@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import stat
@@ -110,6 +111,9 @@ class EventSocket:
                             pass
                         result = self.spool.read(after, limit)
                     result["receiver_ready"] = self.ready
+                    # Consumers bind a watch to the receiver's actual scope.
+                    result["account_id"] = self.spool.account_id
+                    result["peer_ids"] = sorted(self.spool.peers)
             finally:
                 self.waiters -= 1
         except (ValueError, TypeError, asyncio.TimeoutError, asyncio.LimitOverrunError):
@@ -117,9 +121,12 @@ class EventSocket:
         try:
             writer.write(json.dumps(result, ensure_ascii=False).encode() + b"\n")
             await writer.drain()
+        except ConnectionError:
+            pass  # A cancelled bounded wait can close before its reply is ready.
         finally:
             writer.close()
-            await writer.wait_closed()
+            with contextlib.suppress(ConnectionError):
+                await writer.wait_closed()
 
     async def start(self, path: Path):
         # Exclusive receiver lock must already be held by caller.

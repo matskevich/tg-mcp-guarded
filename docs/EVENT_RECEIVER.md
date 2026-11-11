@@ -45,6 +45,8 @@ Set `TG_EVENT_SOCKET=/private/tg-events/events.sock` on the read MCP process.
 `timeout_seconds` up to 50 waits on an in-process condition notified by new events.
 There is no periodic Telegram history query during this wait. The reply includes
 `receiver_ready`, `stream_id`, `events`, `next_cursor`, `oldest_seq` and `latest_seq`.
+The socket reply also includes `account_id` and `peer_ids`, taken from the
+spool's persisted binding. Consumers validate both before registering a watch.
 
 A deterministic worker can call `read_event_socket` directly, filter for the
 operator's chosen trigger, then invoke a model only when needed. Do not implement
