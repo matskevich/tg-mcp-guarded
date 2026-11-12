@@ -1,6 +1,7 @@
 import asyncio
 import datetime
 import importlib.util
+import json
 import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,6 +17,53 @@ spec = importlib.util.spec_from_file_location(
 )
 receiver = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(receiver)
+
+
+def test_added_peers_survive_restart_with_account_binding(tmp_path):
+    path = tmp_path / "spool.sqlite"
+    spool = EventSpool(path, 1, {10})
+    stream = spool.stream_id
+    spool.add_peer(20, 100)
+    spool.add_peer(20, 200)
+    assert spool.checkpoint(20) == 100
+    spool.close()
+    spool = EventSpool(path, 1, {10}, restore_peers=True)
+    assert spool.peers == {10, 20}
+    assert spool.stream_id == stream
+    assert spool.checkpoint(20) == 100
+    spool.close()
+    with pytest.raises(ValueError, match="account binding"):
+        EventSpool(path, 2, {10}, restore_peers=True)
+
+
+@pytest.mark.asyncio
+async def test_socket_registers_peer_through_explicit_callback(tmp_path):
+    spool = EventSpool(tmp_path / "spool.sqlite", 1, {10})
+    calls = []
+
+    async def subscribe(peer):
+        calls.append(peer)
+        spool.add_peer(peer, 100)
+
+    service = EventSocket(spool, subscribe=subscribe)
+    service.ready = True
+    path = tmp_path / "events.sock"
+    server = await service.start(path)
+    try:
+        reader, writer = await asyncio.open_unix_connection(str(path))
+        writer.write(json.dumps({"add_peer": 20}).encode() + b"\n")
+        await writer.drain()
+        result = json.loads(await reader.readline())
+        writer.close()
+        await writer.wait_closed()
+        assert result["peer_ids"] == [10, 20]
+        assert result["dynamic_peers"] is True
+        assert calls == [20]
+        assert spool.checkpoint(20) == 100
+    finally:
+        server.close()
+        await server.wait_closed()
+        spool.close()
 
 
 def payload(mid=1, peer=10, text="synthetic message"):

@@ -152,11 +152,29 @@ async def run(args):
     os.chmod(args.state_dir, 0o700)
     with (args.state_dir / "receiver.lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        spool = EventSpool(args.state_dir / "events.sqlite3", args.account_id, peers)
+        allow_subscriptions = getattr(args, "allow_subscriptions", False)
+        spool = EventSpool(args.state_dir / "events.sqlite3", args.account_id, peers,
+                           restore_peers=allow_subscriptions)
         client = get_client_for_session(str(session))
-        socket = EventSocket(spool, lambda: transport_connected(client))
         queue = asyncio.Queue(maxsize=5000)
         fatal = asyncio.Event()
+        registration_lock = asyncio.Lock()
+
+        async def subscribe(peer):
+            async with registration_lock:
+                if peer in peers:
+                    return
+                await safe_call(client.get_input_entity, peer, operation_type="api")
+                latest = await safe_call(client.get_messages, peer, limit=1, operation_type="api")
+                spool.add_peer(peer, latest[0].id if latest else 0)
+                try:
+                    await reconcile(client, spool, {peer}, safe_call)
+                except Exception:
+                    fatal.set()
+                    raise
+
+        socket = EventSocket(spool, lambda: transport_connected(client),
+                             subscribe if allow_subscriptions else None)
 
         async def receive(event):
             if event.chat_id in peers and not event.message.out:
@@ -232,6 +250,7 @@ def main():
     parser.add_argument("--account-id", required=True, type=int)
     parser.add_argument("--peer", required=True, action="append", type=int)
     parser.add_argument("--state-dir", required=True, type=Path)
+    parser.add_argument("--allow-subscriptions", action="store_true")
     args = parser.parse_args()
     os.umask(0o077)
     try:

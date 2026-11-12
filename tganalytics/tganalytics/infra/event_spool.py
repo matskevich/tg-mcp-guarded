@@ -13,7 +13,8 @@ from pathlib import Path
 
 class EventSpool:
     def __init__(
-        self, path: Path, account_id: int, peers: set[int], max_events: int = 10000
+        self, path: Path, account_id: int, peers: set[int], max_events: int = 10000,
+        restore_peers: bool = False,
     ):
         if not peers or account_id <= 0 or max_events < 1:
             raise ValueError("account, peers and positive retention are required")
@@ -30,11 +31,19 @@ class EventSpool:
                 event_key TEXT PRIMARY KEY, seen_order INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS checkpoints (peer INTEGER PRIMARY KEY, message_id INTEGER);
         """)
-        binding = json.dumps([account_id, sorted(peers)])
         old = self.db.execute("SELECT value FROM meta WHERE key='binding'").fetchone()
+        if old and restore_peers:
+            old_account, old_peers = json.loads(old[0])
+            if old_account != account_id:
+                self.db.close()
+                raise ValueError("spool account binding differs")
+            peers.update(old_peers)
+        binding = json.dumps([account_id, sorted(peers)])
         if old and old[0] != binding:
-            self.db.close()
-            raise ValueError("spool account/peer binding differs; use a new spool")
+            if not restore_peers:
+                self.db.close()
+                raise ValueError("spool account/peer binding differs; use a new spool")
+            self.db.execute("UPDATE meta SET value=? WHERE key='binding'", (binding,))
         self.db.execute("INSERT OR IGNORE INTO meta VALUES ('binding', ?)", (binding,))
         self.db.execute(
             "INSERT OR IGNORE INTO meta VALUES ('stream_id', ?)", (str(uuid.uuid4()),)
@@ -53,6 +62,17 @@ class EventSpool:
             "SELECT message_id FROM checkpoints WHERE peer=?", (peer,)
         ).fetchone()
         return row[0] if row else None
+
+    def add_peer(self, peer: int, message_id: int):
+        if type(peer) is not int or peer == 0 or message_id < 0:
+            raise ValueError("invalid peer checkpoint")
+        if peer in self.peers:
+            return
+        with self.db:
+            self.db.execute("UPDATE meta SET value=? WHERE key='binding'",
+                            (json.dumps([self.account_id, sorted(self.peers | {peer})]),))
+            self.db.execute("INSERT OR IGNORE INTO checkpoints VALUES (?,?)", (peer, message_id))
+        self.peers.add(peer)
 
     def seed(self, peer: int, message_id: int):
         if peer not in self.peers:
