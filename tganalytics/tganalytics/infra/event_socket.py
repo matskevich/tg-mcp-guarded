@@ -43,10 +43,11 @@ async def read_event_socket(
 
 
 class EventSocket:
-    def __init__(self, spool, transport_connected=None):
+    def __init__(self, spool, transport_connected=None, subscribe=None):
         self.spool = spool
         self.changed = asyncio.Condition()
         self.transport_connected = transport_connected
+        self.subscribe = subscribe
         self.ready = False
         self.waiters = 0
 
@@ -77,6 +78,14 @@ class EventSocket:
                 args = json.loads(line)
                 if not isinstance(args, dict):
                     raise ValueError("invalid_request")
+                if "add_peer" in args:
+                    peer = args["add_peer"]
+                    if type(peer) is not int or peer == 0 or self.subscribe is None or not self.ready:
+                        raise ValueError("subscription_unavailable")
+                    try:
+                        await self.subscribe(peer)
+                    except Exception:
+                        raise ValueError("peer_subscription_failed") from None
                 after, limit, timeout = (
                     args.get("after_seq", 0),
                     args.get("limit", 20),
@@ -114,6 +123,7 @@ class EventSocket:
                     # Consumers bind a watch to the receiver's actual scope.
                     result["account_id"] = self.spool.account_id
                     result["peer_ids"] = sorted(self.spool.peers)
+                    result["dynamic_peers"] = self.subscribe is not None
             finally:
                 self.waiters -= 1
         except (ValueError, TypeError, asyncio.TimeoutError, asyncio.LimitOverrunError):

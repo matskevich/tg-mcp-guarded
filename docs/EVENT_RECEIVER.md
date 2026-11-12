@@ -104,3 +104,12 @@ Official protocol: [updates](https://core.telegram.org/api/updates).
 Business Bot webhooks are a separate future adapter: both can feed the same
 application event contract, but this implementation does not create a bot,
 connect a Telegram Business account, or configure a webhook.
+
+## Task-selected peers
+
+With `--allow-subscriptions`, the owner-only socket accepts `add_peer` with an
+exact numeric peer. The receiver resolves it using the existing account, seeds
+the current message checkpoint and reconciles the registration window. This
+operation does not join chats or send messages. Added peers remain in the bound
+spool across restart; a different account cannot load that spool. Without this
+flag, the configured peer list remains fixed. Replies advertise `dynamic_peers`.
