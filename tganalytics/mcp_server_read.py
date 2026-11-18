@@ -374,5 +374,21 @@ async def tg_auth_status() -> dict:
     return await ctx.auth_status()
 
 
+
+
+@mcp.tool()
+async def tg_get_forum_topics(group: str, limit: int = 100) -> dict:
+    """Read bounded forum topic ids/titles and owner access independently of actions."""
+    from telethon.tl.functions.channels import GetForumTopicsRequest
+    manager = await ctx.get_manager()
+    entity = await manager._resolve_target_entity(group)
+    result = await safe_call(ctx.client, GetForumTopicsRequest(channel=entity, offset_date=None,
+                            offset_id=0, offset_topic=0, limit=max(1, min(limit, 100))), operation_type="api")
+    return {"group": group, "forum": bool(getattr(entity, "forum", False)),
+            "creator": bool(getattr(entity, "creator", False)), "count": result.count,
+            "topics": [{"id": t.id, "title": getattr(t, "title", ""),
+                        "top_message": getattr(t, "top_message", None)} for t in result.topics]}
+
+
 if __name__ == "__main__":
     mcp.run(transport="stdio")

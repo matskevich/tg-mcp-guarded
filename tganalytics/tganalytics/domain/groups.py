@@ -1332,8 +1332,8 @@ class GroupManager:
             raise ValueError("Group title is empty")
 
         group_kind = str(kind or "basic").strip().lower()
-        if group_kind not in {"basic", "supergroup"}:
-            raise ValueError("kind must be 'basic' or 'supergroup'")
+        if group_kind not in {"basic", "supergroup", "forum"}:
+            raise ValueError("kind must be 'basic', 'supergroup' or 'forum'")
 
         invitees = list(users or [])
         if group_kind == "basic" and not invitees:
@@ -1395,6 +1395,7 @@ class GroupManager:
                     about=str(about or ""),
                     megagroup=True,
                     broadcast=False,
+                    forum=group_kind == "forum",
                 ),
                 operation_type="join",
             )
@@ -1419,7 +1420,7 @@ class GroupManager:
         if group_entity is None:
             raise RuntimeError("Telegram did not return created group entity")
 
-        if group_kind == "supergroup":
+        if group_kind in {"supergroup", "forum"}:
             from telethon.tl.functions.channels import InviteToChannelRequest
 
             for user_identifier, user_entity in zip(invitees, user_entities):

@@ -1090,8 +1090,8 @@ async def tg_create_private_group(
     if not clean_title:
         return _blocked("title is empty")
     group_kind = str(kind or "basic").strip().lower()
-    if group_kind not in {"basic", "supergroup"}:
-        return _blocked("kind must be 'basic' or 'supergroup'")
+    if group_kind not in {"basic", "supergroup", "forum"}:
+        return _blocked("kind must be 'basic', 'supergroup' or 'forum'")
 
     can_run, error = _check_action_preconditions(
         clean_title,
@@ -1156,6 +1156,44 @@ async def tg_create_private_group(
         CONFIRMATION_PHRASE if REQUIRE_CONFIRMATION_TEXT else None
     )
     return result
+
+
+
+@mcp.tool()
+async def tg_create_forum_topic(
+    group: str, title: str, dry_run: bool = True, confirm: bool = False,
+    confirmation_text: str = "", approval_code: str = "",
+) -> dict:
+    """Create one topic in an exact private forum; reconcile unknown effects before retry."""
+    from telethon.tl.functions.channels import CreateForumTopicRequest
+    if not (group.startswith("-100") and group[1:].isdigit()) or not 0 < len(title.strip()) <= 128:
+        return _blocked("Exact supergroup ID and title (1..128 characters) required")
+    can_run, error = _check_action_preconditions(group, dry_run=dry_run, confirm=confirm,
+                                                confirmation_text=confirmation_text)
+    if not can_run:
+        return _blocked(error or "preconditions failed")
+    action_hash = _hash_payload({"action": "create_forum_topic", "target": group, "title": title.strip()})
+    ok, error, meta = _approval_gate(action_hash=action_hash, dry_run=dry_run, approval_code=approval_code)
+    if not ok:
+        return _blocked(error or "approval blocked")
+    manager = await ctx.get_manager()
+    entity = await manager._resolve_target_entity(group)
+    if not getattr(entity, "forum", False) or not getattr(entity, "creator", False):
+        return _blocked("Target must be an owner-created forum")
+    if dry_run:
+        return {"success": True, "dry_run": True, "target": group, "title": title.strip(),
+                "action_hash": action_hash, "confirmation_text_required": CONFIRMATION_PHRASE, **(meta or {})}
+    duplicate, retry = _check_recent_duplicate(action_hash)
+    if duplicate:
+        return {"success": False, "duplicate_blocked": True, "retry_after_sec": retry}
+    _mark_action_executed(action_hash)
+    try:
+        updates = await safe_call(ctx.client, CreateForumTopicRequest(channel=entity, title=title.strip()), operation_type="group_msg")
+        ids = [u.message.id for u in getattr(updates, "updates", []) if getattr(getattr(u, "message", None), "action", None).__class__.__name__ == "MessageActionTopicCreate"]
+        return {"success": bool(ids), "dry_run": False, "target": group, "topic_id": ids[0] if ids else None,
+                "reconciliation_required": not bool(ids), "action_hash": action_hash}
+    except Exception as exc:
+        return {"success": False, "error": str(exc), "reconciliation_required": True, "action_hash": action_hash}
 
 
 @mcp.tool()
