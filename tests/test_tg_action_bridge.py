@@ -169,3 +169,43 @@ def test_bridge_write_call_runs_preview_then_confirm(tmp_path):
     assert payload["execution"]["confirmation_text"] == "confirm-test-action"
     assert payload["execution"]["dry_run"] is False
     assert payload["execution"]["message_text"] == "hello"
+
+
+def test_bridge_drains_large_stderr_before_and_between_responses(tmp_path):
+    # Both startup and repeated reads used to deadlock once the unread pipe filled.
+    flooded = FAKE_SERVER.replace(
+        '    method = req.get("method")',
+        '    sys.stderr.write("diagnostic" * 20000)\n'
+        '    sys.stderr.flush()\n'
+        '    method = req.get("method")',
+    )
+    server = tmp_path / "noisy_server.py"
+    server.write_text(flooded)
+    config = _write_config(tmp_path, server)
+    result = subprocess.run(
+        [sys.executable, str(SCRIPT), "--config", str(config),
+         "call", "tg_echo_env", "--args-json", "{}"],
+        capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["runtime_profile"] == "actions_bridge"
+
+
+def test_bridge_retains_bounded_error_tail_on_server_exit(tmp_path):
+    server = tmp_path / "failed_server.py"
+    server.write_text(
+        'import sys\n'
+        'sys.stdin.readline()\n'
+        'sys.stderr.write("x" * 200000 + "final diagnostic")\n'
+        'sys.stderr.flush()\n'
+        'sys.exit(3)\n'
+    )
+    config = _write_config(tmp_path, server)
+    result = subprocess.run(
+        [sys.executable, str(SCRIPT), "--config", str(config),
+         "call", "tg_echo_env", "--args-json", "{}"],
+        capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode != 0
+    assert "final diagnostic" in result.stderr
+    assert len(result.stderr) < 20000

@@ -392,6 +392,31 @@ async def test_get_messages_supports_direct_user_dialog(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("target", ["12345", 12345, "@test_user", "test_user"])
+async def test_direct_history_by_id_and_username_returns_same_messages(
+    mock_telegram_client, mock_user, target
+):
+    """A numeric peer must not silently become an empty @numeric-username read."""
+    from tests.conftest import AsyncIteratorMock
+
+    async def resolve(value):
+        if value not in (12345, "@test_user"):
+            raise ValueError("no such username")
+        return mock_user
+
+    mock_telegram_client.get_entity.side_effect = resolve
+    mock_telegram_client.iter_messages.return_value = AsyncIteratorMock(
+        [SimpleNamespace(id=42, date=datetime(2026, 4, 2, 10, 30),
+                         from_id=SimpleNamespace(user_id=mock_user.id),
+                         message="signed document received", media=None,
+                         fwd_from=None, forward=None, reply_to=None,
+                         views=None, forwards=None, pinned=False)]
+    )
+    result = await GroupManager(mock_telegram_client).get_messages(target, limit=5)
+    assert [(m["id"], m["text"]) for m in result] == [(42, "signed document received")]
+
+
+@pytest.mark.asyncio
 async def test_get_messages_since_stops_at_cutoff(mock_telegram_client, mock_user):
     """Since-export читает newest->oldest и останавливается на cutoff."""
     from tests.conftest import AsyncIteratorMock

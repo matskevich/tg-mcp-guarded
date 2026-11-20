@@ -162,7 +162,8 @@ class GroupManager:
             if isinstance(group_identifier, int):
                 entity_id: Union[str, int] = group_identifier
             elif isinstance(group_identifier, str) and (
-                group_identifier.startswith("-") and group_identifier[1:].isdigit()
+                group_identifier.isdigit()
+                or (group_identifier.startswith("-") and group_identifier[1:].isdigit())
             ):
                 entity_id = int(group_identifier)
             else:
