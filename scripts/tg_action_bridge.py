@@ -12,8 +12,10 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 import tomllib
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -174,6 +176,8 @@ class MCPStdioClient:
         self.env = env
         self._proc: subprocess.Popen[str] | None = None
         self._next_id = 1
+        self._stderr_tail: deque[str] = deque(maxlen=16)
+        self._stderr_thread: threading.Thread | None = None
 
     def __enter__(self) -> "MCPStdioClient":
         self.start()
@@ -191,10 +195,16 @@ class MCPStdioClient:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            errors="replace",
             bufsize=1,
             cwd=self.spec.cwd,
             env=self.env,
         )
+        self._stderr_tail.clear()
+        self._stderr_thread = threading.Thread(
+            target=self._drain_stderr, args=(self._proc.stderr,), daemon=True
+        )
+        self._stderr_thread.start()
         self._request(
             "initialize",
             {
@@ -215,7 +225,21 @@ class MCPStdioClient:
             except subprocess.TimeoutExpired:
                 self._proc.kill()
                 self._proc.wait(timeout=2)
+        if self._stderr_thread is not None:
+            self._stderr_thread.join(timeout=2)
+            self._stderr_thread = None
         self._proc = None
+
+    def _drain_stderr(self, stream) -> None:
+        # Servers log during normal reads too. An undrained pipe eventually blocks
+        # the server before it can send the JSON-RPC response on stdout.
+        if stream is None:
+            return
+        try:
+            while chunk := stream.read(1024):
+                self._stderr_tail.append(chunk)
+        except (OSError, ValueError):
+            pass
 
     def list_tools(self) -> list[str]:
         result = self._request("tools/list", {})
@@ -268,12 +292,9 @@ class MCPStdioClient:
             if line:
                 break
             returncode = self._proc.poll()
-            stderr = ""
-            if self._proc.stderr is not None:
-                try:
-                    stderr = self._proc.stderr.read().strip()
-                except Exception:
-                    stderr = ""
+            if self._stderr_thread is not None:
+                self._stderr_thread.join(timeout=1)
+            stderr = "".join(self._stderr_tail).strip()
             if returncode is None:
                 raise BridgeError("No MCP response received.")
             detail = f" (exit={returncode})" if returncode is not None else ""
