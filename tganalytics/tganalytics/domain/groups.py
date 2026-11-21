@@ -1251,6 +1251,73 @@ class GroupManager:
             raise ValueError(f"Target '{user_identifier}' is not a Telegram user")
         return entity
 
+    async def migrate_basic_group(
+        self, group: str, expected_title: str, dry_run: bool = True
+    ) -> Dict[str, Any]:
+        """Upgrade one exact basic group; never change privacy or permissions."""
+        from telethon.tl.functions.messages import MigrateChatRequest
+        from telethon.tl.functions.channels import GetFullChannelRequest
+
+        entity = await self._resolve_group_entity_for_admin(group)
+        if not isinstance(entity, Chat):
+            raise ValueError("Target is not a basic group; no migration performed")
+        if str(-entity.id) != group:
+            raise ValueError("Exact negative basic-group ID required")
+        if entity.title != expected_title:
+            raise ValueError("Group title changed; refresh preview")
+        if getattr(entity, "migrated_to", None):
+            return {"success": False, "already_migrated": True,
+                    "new_group_id": -1000000000000 - entity.migrated_to.channel_id,
+                    "old_group_id": -entity.id, "dry_run": dry_run}
+        rights = await _safe_api_call(self.client.get_permissions, entity, "me")
+        if not (rights.is_creator or rights.is_admin):
+            raise ValueError("Current account is not a group administrator")
+        before = await _safe_api_call(self.client.get_participants, entity)
+        before_ids = {u.id for u in before}
+        result = {"action": "migrate_basic_group", "dry_run": dry_run,
+                  "old_group_id": -entity.id, "title": entity.title,
+                  "participants_before": len(before_ids), "irreversible": True}
+        if dry_run:
+            return dict(result, success=True)
+        updated = await _safe_api_call(
+            self.client, MigrateChatRequest(chat_id=entity.id),
+            operation_type="join", operation_target_id=entity.id,
+        )
+        # RPC completed: failed read-back must never imply safe automatic retry.
+        result.update(migration_submitted=True, success=False)
+        try:
+            old = next((c for c in updated.chats if isinstance(c, Chat)
+                        and c.id == entity.id and getattr(c, "migrated_to", None)), None)
+            if old is None:
+                raise ValueError("Migration mapping missing; manual reconciliation required")
+            new = next((c for c in updated.chats if isinstance(c, Channel)
+                        and c.id == old.migrated_to.channel_id), None)
+            if new is None:
+                raise ValueError("Mapped supergroup missing from result")
+            result["new_group_id"] = -1000000000000 - new.id
+            full = await _safe_api_call(self.client, GetFullChannelRequest(new))
+            verified = next(c for c in full.chats if isinstance(c, Channel) and c.id == new.id)
+            after = await _safe_api_call(self.client.get_participants, verified)
+            after_ids = {u.id for u in after}
+            private = not getattr(verified, "username", None) and not any(
+                getattr(u, "active", False) for u in (getattr(verified, "usernames", None) or [])
+            )
+            linked = getattr(full.full_chat, "migrated_from_chat_id", None) == entity.id
+            result.update(private_verified=private, mapping_verified=linked,
+                          participants_unchanged=before_ids == after_ids,
+                          participants_after=len(after_ids),
+                          title_verified=verified.title == expected_title,
+                          supergroup_verified=bool(verified.megagroup))
+            result["success"] = all(result[k] for k in (
+                "private_verified", "mapping_verified", "participants_unchanged",
+                "title_verified", "supergroup_verified"))
+            result["read_back_verified"] = result["success"]
+        except Exception as exc:
+            result["verification_error"] = str(exc)
+            result["read_back_verified"] = False
+        result["next_step"] = "Reconcile new target and republish pin; old message IDs stay historical."
+        return result
+
     async def create_private_group(
         self,
         title: str,
@@ -1265,8 +1332,8 @@ class GroupManager:
             raise ValueError("Group title is empty")
 
         group_kind = str(kind or "basic").strip().lower()
-        if group_kind not in {"basic", "supergroup"}:
-            raise ValueError("kind must be 'basic' or 'supergroup'")
+        if group_kind not in {"basic", "supergroup", "forum"}:
+            raise ValueError("kind must be 'basic', 'supergroup' or 'forum'")
 
         invitees = list(users or [])
         if group_kind == "basic" and not invitees:
@@ -1328,6 +1395,7 @@ class GroupManager:
                     about=str(about or ""),
                     megagroup=True,
                     broadcast=False,
+                    forum=group_kind == "forum",
                 ),
                 operation_type="join",
             )
@@ -1352,7 +1420,7 @@ class GroupManager:
         if group_entity is None:
             raise RuntimeError("Telegram did not return created group entity")
 
-        if group_kind == "supergroup":
+        if group_kind in {"supergroup", "forum"}:
             from telethon.tl.functions.channels import InviteToChannelRequest
 
             for user_identifier, user_entity in zip(invitees, user_entities):
@@ -1769,6 +1837,35 @@ class GroupManager:
         except Exception as e:
             logger.error(
                 "Ошибка при закреплении сообщения %s в группе %s: %s",
+                message_id,
+                group_identifier,
+                e,
+            )
+            return False
+
+    async def unpin_message(
+        self,
+        group_identifier: Union[str, int],
+        message_id: int,
+    ) -> bool:
+        """Снимает закреп только с конкретного сообщения, сохраняя историю."""
+        try:
+            entity = await self._resolve_target_entity(group_identifier)
+            await _safe_api_call(
+                self.client.unpin_message,
+                entity,
+                int(message_id),
+                operation_type="group_msg",
+            )
+            logger.info(
+                "Сообщение %s откреплено в группе %s",
+                message_id,
+                group_identifier,
+            )
+            return True
+        except Exception as e:
+            logger.error(
+                "Ошибка при откреплении сообщения %s в группе %s: %s",
                 message_id,
                 group_identifier,
                 e,

@@ -1021,6 +1021,59 @@ def _create_leave_dialog_batch_record(
 
 
 @mcp.tool()
+async def tg_migrate_basic_group(
+    group: str,
+    expected_title: str,
+    dry_run: bool = True,
+    confirm: bool = False,
+    confirmation_text: str = "",
+    approval_code: str = "",
+) -> dict:
+    """Irreversibly upgrade an exact basic group to a private supergroup.
+
+    Does not change members, permissions, allowlists or automation targets.
+    Always reconcile an uncertain result before another attempt.
+    """
+    if not (group.startswith("-") and group[1:].isdigit()) or not expected_title.strip():
+        return _blocked("Exact negative group ID and expected_title required")
+    allowed, error = _check_action_preconditions(
+        group, dry_run=dry_run, confirm=confirm, confirmation_text=confirmation_text
+    )
+    if not allowed:
+        return _blocked(error or "preconditions failed")
+    action_hash = _hash_payload({"action": "migrate_basic_group", "target": group,
+                                 "expected_title": expected_title})
+    ok, error, meta = _approval_gate(action_hash=action_hash, dry_run=dry_run,
+                                     approval_code=approval_code)
+    if not ok:
+        return _blocked(error or "approval blocked")
+    if not dry_run:
+        duplicate, retry = _check_recent_duplicate(action_hash)
+        if duplicate:
+            return {"success": False, "duplicate_blocked": True,
+                    "retry_after_sec": retry, "error": "Reconcile prior migration; no forced retry."}
+    manager = await ctx.get_manager()
+    try:
+        # Validate permissions before reserving an irreversible execution.
+        preview = await manager.migrate_basic_group(group, expected_title, dry_run=True)
+        if not preview.get("success"):
+            return preview
+        if dry_run:
+            result = preview
+        else:
+            _mark_action_executed(action_hash)
+            result = await manager.migrate_basic_group(group, expected_title, dry_run=False)
+    except Exception as exc:
+        return {"success": False, "error": str(exc), "dry_run": dry_run,
+                "reconciliation_required": not dry_run, "action_hash": action_hash}
+    if dry_run and meta:
+        result.update(meta)
+    result["action_hash"] = action_hash
+    result["confirmation_text_required"] = CONFIRMATION_PHRASE if REQUIRE_CONFIRMATION_TEXT else None
+    return result
+
+
+@mcp.tool()
 async def tg_create_private_group(
     title: str,
     users: list[str] | None = None,
@@ -1037,8 +1090,8 @@ async def tg_create_private_group(
     if not clean_title:
         return _blocked("title is empty")
     group_kind = str(kind or "basic").strip().lower()
-    if group_kind not in {"basic", "supergroup"}:
-        return _blocked("kind must be 'basic' or 'supergroup'")
+    if group_kind not in {"basic", "supergroup", "forum"}:
+        return _blocked("kind must be 'basic', 'supergroup' or 'forum'")
 
     can_run, error = _check_action_preconditions(
         clean_title,
@@ -1103,6 +1156,44 @@ async def tg_create_private_group(
         CONFIRMATION_PHRASE if REQUIRE_CONFIRMATION_TEXT else None
     )
     return result
+
+
+
+@mcp.tool()
+async def tg_create_forum_topic(
+    group: str, title: str, dry_run: bool = True, confirm: bool = False,
+    confirmation_text: str = "", approval_code: str = "",
+) -> dict:
+    """Create one topic in an exact private forum; reconcile unknown effects before retry."""
+    from telethon.tl.functions.channels import CreateForumTopicRequest
+    if not (group.startswith("-100") and group[1:].isdigit()) or not 0 < len(title.strip()) <= 128:
+        return _blocked("Exact supergroup ID and title (1..128 characters) required")
+    can_run, error = _check_action_preconditions(group, dry_run=dry_run, confirm=confirm,
+                                                confirmation_text=confirmation_text)
+    if not can_run:
+        return _blocked(error or "preconditions failed")
+    action_hash = _hash_payload({"action": "create_forum_topic", "target": group, "title": title.strip()})
+    ok, error, meta = _approval_gate(action_hash=action_hash, dry_run=dry_run, approval_code=approval_code)
+    if not ok:
+        return _blocked(error or "approval blocked")
+    manager = await ctx.get_manager()
+    entity = await manager._resolve_target_entity(group)
+    if not getattr(entity, "forum", False) or not getattr(entity, "creator", False):
+        return _blocked("Target must be an owner-created forum")
+    if dry_run:
+        return {"success": True, "dry_run": True, "target": group, "title": title.strip(),
+                "action_hash": action_hash, "confirmation_text_required": CONFIRMATION_PHRASE, **(meta or {})}
+    duplicate, retry = _check_recent_duplicate(action_hash)
+    if duplicate:
+        return {"success": False, "duplicate_blocked": True, "retry_after_sec": retry}
+    _mark_action_executed(action_hash)
+    try:
+        updates = await safe_call(ctx.client, CreateForumTopicRequest(channel=entity, title=title.strip()), operation_type="group_msg")
+        ids = [u.message.id for u in getattr(updates, "updates", []) if getattr(getattr(u, "message", None), "action", None).__class__.__name__ == "MessageActionTopicCreate"]
+        return {"success": bool(ids), "dry_run": False, "target": group, "topic_id": ids[0] if ids else None,
+                "reconciliation_required": not bool(ids), "action_hash": action_hash}
+    except Exception as exc:
+        return {"success": False, "error": str(exc), "reconciliation_required": True, "action_hash": action_hash}
 
 
 @mcp.tool()
@@ -1967,6 +2058,99 @@ async def tg_pin_message(
         "message_id": normalized_message_id,
         "action_hash": action_hash,
         "error": "pin_message failed (see server logs for details)",
+    }
+
+
+@mcp.tool()
+async def tg_unpin_message(
+    group: str,
+    message_id: int,
+    dry_run: bool = True,
+    confirm: bool = False,
+    confirmation_text: str = "",
+    approval_code: str = "",
+    force_resend: bool = False,
+) -> dict:
+    """Unpin one exact message; preserve history, approvals and idempotency."""
+    can_run, error = _check_action_preconditions(
+        group,
+        dry_run=dry_run,
+        confirm=confirm,
+        confirmation_text=confirmation_text,
+    )
+    if not can_run:
+        return _blocked(error or "preconditions failed")
+
+    try:
+        normalized_message_id = int(message_id)
+    except (TypeError, ValueError):
+        return _blocked("message_id must be a positive integer")
+    if normalized_message_id <= 0:
+        return _blocked("message_id must be a positive integer")
+
+    action_hash = _hash_payload(
+        {
+            "action": "unpin_message",
+            "target": _normalize_target(group),
+            "message_id": normalized_message_id,
+        }
+    )
+
+    approval_ok, approval_error, approval_meta = _approval_gate(
+        action_hash=action_hash,
+        dry_run=dry_run,
+        approval_code=approval_code,
+    )
+    if not approval_ok:
+        return _blocked(approval_error or "approval gate blocked")
+
+    if dry_run:
+        result = {
+            "success": True,
+            "dry_run": True,
+            "target": group,
+            "message_id": normalized_message_id,
+            "action_hash": action_hash,
+            "confirmation_text_required": (
+                CONFIRMATION_PHRASE if REQUIRE_CONFIRMATION_TEXT else None
+            ),
+        }
+        if approval_meta:
+            result.update(approval_meta)
+        return result
+
+    if not force_resend:
+        duplicate, retry_after_sec = _check_recent_duplicate(action_hash)
+        if duplicate:
+            return {
+                "success": False,
+                "duplicate_blocked": True,
+                "retry_after_sec": retry_after_sec,
+                "action_hash": action_hash,
+                "error": "Duplicate action blocked by idempotency window. "
+                "Set force_resend=true to override.",
+            }
+
+    manager = await ctx.get_manager()
+    pinned = await manager.unpin_message(
+        group,
+        normalized_message_id,
+    )
+    if pinned:
+        _mark_action_executed(action_hash)
+        return {
+            "success": True,
+            "target": group,
+            "message_id": normalized_message_id,
+            "action_hash": action_hash,
+        }
+
+    return {
+        "success": False,
+        "target": group,
+        "message_id": normalized_message_id,
+        "action_hash": action_hash,
+        "error": "unpin_message failed (see server logs for details)",
     }
 
 
