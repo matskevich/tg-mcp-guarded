@@ -1843,6 +1843,35 @@ class GroupManager:
             )
             return False
 
+    async def unpin_message(
+        self,
+        group_identifier: Union[str, int],
+        message_id: int,
+    ) -> bool:
+        """Снимает закреп только с конкретного сообщения, сохраняя историю."""
+        try:
+            entity = await self._resolve_target_entity(group_identifier)
+            await _safe_api_call(
+                self.client.unpin_message,
+                entity,
+                int(message_id),
+                operation_type="group_msg",
+            )
+            logger.info(
+                "Сообщение %s откреплено в группе %s",
+                message_id,
+                group_identifier,
+            )
+            return True
+        except Exception as e:
+            logger.error(
+                "Ошибка при откреплении сообщения %s в группе %s: %s",
+                message_id,
+                group_identifier,
+                e,
+            )
+            return False
+
     async def send_file(
         self, group_identifier: Union[str, int], file_path: str, caption: str = ""
     ) -> bool:
