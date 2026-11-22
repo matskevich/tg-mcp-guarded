@@ -109,6 +109,7 @@ WRITE_REQUEST_PREFIXES = (
 )
 
 WRITE_REQUEST_NAMES = {
+    "MigrateChatRequest",
     # This request is named "Get..." in MTProto, but clicking a bot callback
     # button mutates bot-side conversation state and must stay ActionMCP-only.
     "GetBotCallbackAnswerRequest",
