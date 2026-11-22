@@ -2109,12 +2109,24 @@ class GroupManager:
         drop_author: bool = False,
         drop_media_captions: bool = False,
         dry_run: bool = False,
+        to_topic_id: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Пересылает сообщения из одного диалога в другой."""
         try:
             source_entity = await self._resolve_target_entity(from_group_identifier)
             target_entity = await self._resolve_target_entity(to_group_identifier)
             normalized_ids = self._normalize_message_ids(message_ids)
+            if to_topic_id is not None:
+                if isinstance(to_topic_id, bool) or not isinstance(to_topic_id, int) or to_topic_id <= 0:
+                    raise ValueError("to_topic_id must be a positive integer")
+                if not getattr(target_entity, "forum", False):
+                    raise ValueError("topic forwarding requires a forum target")
+                from telethon.tl.functions.channels import GetForumTopicsByIDRequest
+                topics = await _safe_api_call(self.client,
+                    GetForumTopicsByIDRequest(channel=target_entity, topics=[to_topic_id]))
+                matches = [t for t in getattr(topics, "topics", []) if getattr(t, "id", None) == to_topic_id]
+                if len(matches) != 1 or getattr(matches[0], "closed", False):
+                    raise ValueError("target topic missing or closed")
             result = {
                 "success": True,
                 "action": "forward_messages",
@@ -2122,6 +2134,7 @@ class GroupManager:
                 "from_target": str(from_group_identifier),
                 "to_target": str(to_group_identifier),
                 "message_ids": normalized_ids,
+                "to_topic_id": to_topic_id,
                 "message_count": len(normalized_ids),
                 "drop_author": bool(drop_author),
                 "drop_media_captions": bool(drop_media_captions),
@@ -2130,15 +2143,19 @@ class GroupManager:
             if dry_run:
                 return result
 
-            await _safe_api_call(
-                self.client.forward_messages,
-                target_entity,
-                normalized_ids,
-                from_peer=source_entity,
-                drop_author=bool(drop_author),
-                drop_media_captions=bool(drop_media_captions),
-                operation_type="group_msg",
-            )
+            if to_topic_id is not None:
+                import secrets
+                from telethon.tl.functions.messages import ForwardMessagesRequest
+                await _safe_api_call(self.client, ForwardMessagesRequest(
+                    from_peer=source_entity, to_peer=target_entity,
+                    id=normalized_ids, random_id=[secrets.randbits(63) for _ in normalized_ids],
+                    top_msg_id=to_topic_id, drop_author=bool(drop_author),
+                    drop_media_captions=bool(drop_media_captions)), operation_type="group_msg")
+            else:
+                await _safe_api_call(
+                    self.client.forward_messages, target_entity, normalized_ids,
+                    from_peer=source_entity, drop_author=bool(drop_author),
+                    drop_media_captions=bool(drop_media_captions), operation_type="group_msg")
             return result
         except Exception as e:
             logger.error(
