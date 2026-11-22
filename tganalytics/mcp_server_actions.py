@@ -1197,6 +1197,74 @@ async def tg_create_forum_topic(
 
 
 @mcp.tool()
+async def tg_edit_forum_topic(
+    group: str, topic_id: int, expected_title: str, title: str | None = None,
+    closed: bool | None = None, hidden: bool | None = None, pinned: bool | None = None,
+    dry_run: bool = True, confirm: bool = False,
+    confirmation_text: str = "", approval_code: str = "",
+) -> dict:
+    """Reversibly rename, close, hide General or pin an exact owner forum topic.
+
+    History is preserved. Read current title first. Unknown outcomes require
+    independent topic readback before any retry; no force-resend override.
+    """
+    from telethon.tl.functions.channels import (
+        EditForumTopicRequest, GetForumTopicsByIDRequest, UpdatePinnedForumTopicRequest,
+    )
+    if (not (group.startswith("-100") and group[1:].isdigit()) or topic_id < 1
+            or not expected_title or all(v is None for v in (title, closed, hidden, pinned))
+            or (title is not None and not 0 < len(title.strip()) <= 128)
+            or (hidden is not None and topic_id != 1)):
+        return _blocked("Exact forum/topic, expected title and valid change required; only General may be hidden")
+    can_run, error = _check_action_preconditions(
+        group, dry_run=dry_run, confirm=confirm, confirmation_text=confirmation_text)
+    if not can_run:
+        return _blocked(error or "preconditions failed")
+    payload = dict(action="edit_forum_topic", target=group, topic_id=topic_id,
+                   expected_title=expected_title, title=title.strip() if title is not None else None,
+                   closed=closed, hidden=hidden, pinned=pinned)
+    action_hash = _hash_payload(payload)
+    ok, error, meta = _approval_gate(action_hash=action_hash, dry_run=dry_run, approval_code=approval_code)
+    if not ok:
+        return _blocked(error or "approval blocked")
+    manager = await ctx.get_manager()
+    entity = await manager._resolve_target_entity(group)
+    if not getattr(entity, "forum", False) or not getattr(entity, "creator", False):
+        return _blocked("Target must be an owner-created forum")
+    current = await safe_call(ctx.client, GetForumTopicsByIDRequest(channel=entity, topics=[topic_id]), operation_type="api")
+    topic = next((t for t in current.topics if t.id == topic_id), None)
+    if topic is None or getattr(topic, "title", None) != expected_title:
+        return _blocked("Topic missing or changed; read current source before a new preview")
+    if dry_run:
+        return dict(success=True, dry_run=True, changes=payload, action_hash=action_hash,
+                    confirmation_text_required=CONFIRMATION_PHRASE, **(meta or {}))
+    duplicate, retry = _check_recent_duplicate(action_hash)
+    if duplicate:
+        return dict(success=False, duplicate_blocked=True, retry_after_sec=retry)
+    # Fence all attempted effects, including partial RPC success / lost responses.
+    _mark_action_executed(action_hash)
+    try:
+        # Telegram requires closing separately from title/visibility changes.
+        if title is not None:
+            await safe_call(ctx.client, EditForumTopicRequest(
+                channel=entity, topic_id=topic_id, title=payload["title"]),
+                operation_type="group_msg", max_retries=0)
+        if closed is not None:
+            await safe_call(ctx.client, EditForumTopicRequest(
+                channel=entity, topic_id=topic_id, closed=closed), operation_type="group_msg", max_retries=0)
+        if hidden is not None:
+            await safe_call(ctx.client, EditForumTopicRequest(
+                channel=entity, topic_id=topic_id, hidden=hidden), operation_type="group_msg", max_retries=0)
+        if pinned is not None:
+            await safe_call(ctx.client, UpdatePinnedForumTopicRequest(
+                channel=entity, topic_id=topic_id, pinned=pinned), operation_type="group_msg", max_retries=0)
+        return dict(success=True, dry_run=False, target=group, topic_id=topic_id,
+                    action_hash=action_hash, independent_readback_required=True)
+    except Exception as exc:
+        return dict(success=False, error=str(exc), reconciliation_required=True, action_hash=action_hash)
+
+
+@mcp.tool()
 async def tg_list_sessions() -> dict:
     """List available Telegram sessions in data/sessions/."""
     return await ctx.list_sessions()
