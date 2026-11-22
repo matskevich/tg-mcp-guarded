@@ -3188,8 +3188,11 @@ async def tg_forward_messages(
     confirmation_text: str = "",
     approval_code: str = "",
     force_resend: bool = False,
+    to_topic_id: int | None = None,
 ) -> dict:
     """Forward messages between dialogs with policy gates."""
+    if to_topic_id is not None and (isinstance(to_topic_id, bool) or not isinstance(to_topic_id, int) or to_topic_id <= 0):
+        return _blocked("to_topic_id must be a positive integer")
     if SAFE_STARTUP_BLOCK_REASON:
         return _blocked(SAFE_STARTUP_BLOCK_REASON)
     if not ACTIONS_ENABLED:
@@ -3219,6 +3222,7 @@ async def tg_forward_messages(
             "from_target": _normalize_target(from_group),
             "to_target": _normalize_target(to_group),
             "message_ids": normalized_ids,
+            **({"to_topic_id": to_topic_id} if to_topic_id is not None else {}),
             "drop_author": bool(drop_author),
             "drop_media_captions": bool(drop_media_captions),
         }
@@ -3241,6 +3245,7 @@ async def tg_forward_messages(
             drop_author=bool(drop_author),
             drop_media_captions=bool(drop_media_captions),
             dry_run=True,
+            **({"to_topic_id": to_topic_id} if to_topic_id is not None else {}),
         )
         result["action_hash"] = action_hash
         result["confirmation_text_required"] = (
@@ -3270,6 +3275,7 @@ async def tg_forward_messages(
         drop_author=bool(drop_author),
         drop_media_captions=bool(drop_media_captions),
         dry_run=False,
+        **({"to_topic_id": to_topic_id} if to_topic_id is not None else {}),
     )
     result["action_hash"] = action_hash
     result["confirmation_text_required"] = (

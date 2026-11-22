@@ -128,3 +128,14 @@ deletes, member actions and new targets use the normal approval flows.
 - Never bypass MCP with direct Telethon writes from shell scripts.
 - Never disable allowlist/confirmation/approval/idempotency in production.
 - Never run bulk writes without `dry_run` or explicit user confirmation.
+
+### forwarding to a forum topic
+
+`tg_forward_messages(..., to_topic_id=<positive integer>)` preserves the native
+forward header and routes the original into the exact open forum topic. source
+and destination both require allowlist access. the topic is included in the
+approval and idempotency payload; changing it requires a new preview. the
+provider checks that the destination is a forum and the topic exists and is open.
+without this optional field, the existing whole-dialog route is unchanged.
+use a fresh native catalog and verify forward origin, exact text and topic through
+the independent reader. an old cached schema cannot establish this capability.
