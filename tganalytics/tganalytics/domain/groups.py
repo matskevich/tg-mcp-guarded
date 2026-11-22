@@ -682,11 +682,27 @@ class GroupManager:
 
     @staticmethod
     def _media_metadata(msg) -> Dict[str, Any]:
+        from telethon.tl.types import DocumentAttributeAudio
+
         file_obj = getattr(msg, "file", None)
+        document = getattr(msg, "document", None)
+        audio = next(
+            (
+                attr
+                for attr in getattr(document, "attributes", [])
+                if isinstance(attr, DocumentAttributeAudio)
+            ),
+            None,
+        )
         return {
             "media_mime_type": getattr(file_obj, "mime_type", None),
             "media_filename": getattr(file_obj, "name", None),
             "media_size": getattr(file_obj, "size", None),
+            "media_is_audio": audio is not None,
+            "media_is_voice": bool(getattr(audio, "voice", False)),
+            "media_audio_duration": getattr(audio, "duration", None),
+            "media_audio_title": getattr(audio, "title", None),
+            "media_audio_performer": getattr(audio, "performer", None),
         }
 
     @classmethod
