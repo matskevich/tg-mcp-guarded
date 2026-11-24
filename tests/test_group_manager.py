@@ -743,6 +743,15 @@ async def test_send_file_invalid_target(mock_telegram_client):
 
 
 @pytest.mark.asyncio
+async def test_send_jpg_as_document_preserves_explicit_upload_mode(mock_telegram_client, mock_channel):
+    mock_telegram_client.get_entity.return_value = mock_channel
+    mock_telegram_client.send_file = AsyncMock(return_value=MagicMock())
+    manager = GroupManager(mock_telegram_client)
+    assert await manager.send_file("testgroup", "/tmp/13.jpg", force_document=True)
+    assert mock_telegram_client.send_file.call_args.kwargs["force_document"] is True
+
+
+@pytest.mark.asyncio
 async def test_download_media_falls_back_to_peer_history(
     mock_telegram_client, mock_user, tmp_path
 ):

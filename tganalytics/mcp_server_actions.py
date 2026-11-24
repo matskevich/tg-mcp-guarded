@@ -2382,6 +2382,7 @@ async def tg_send_file(
     confirmation_text: str = "",
     approval_code: str = "",
     force_resend: bool = False,
+    force_document: bool = False,
 ) -> dict:
     """Send local file with policy gates (confirm + confirmation_text + idempotency)."""
     can_run, error = _check_action_preconditions(
@@ -2392,6 +2393,9 @@ async def tg_send_file(
     )
     if not can_run:
         return _blocked(error or "preconditions failed")
+
+    if type(force_document) is not bool:
+        return _blocked("force_document must be a bool")
 
     path = (file_path or "").strip()
     if not path:
@@ -2417,16 +2421,17 @@ async def tg_send_file(
         }
 
     stat = os.stat(path)
-    action_hash = _hash_payload(
-        {
-            "action": "send_file",
-            "target": _normalize_target(group),
-            "file_path": os.path.abspath(path),
-            "file_size": int(stat.st_size),
-            "file_mtime_ns": int(stat.st_mtime_ns),
-            "caption": clean_caption,
-        }
-    )
+    payload = {
+        "action": "send_file",
+        "target": _normalize_target(group),
+        "file_path": os.path.abspath(path),
+        "file_size": int(stat.st_size),
+        "file_mtime_ns": int(stat.st_mtime_ns),
+        "caption": clean_caption,
+    }
+    if force_document:
+        payload["force_document"] = True
+    action_hash = _hash_payload(payload)
 
     approval_ok, approval_error, approval_meta = _approval_gate(
         action_hash=action_hash,
@@ -2444,6 +2449,7 @@ async def tg_send_file(
             "file_path": path,
             "file_size_mb": round(file_size_mb, 3),
             "caption_len": len(clean_caption),
+            "force_document": force_document,
             "action_hash": action_hash,
             "confirmation_text_required": (
                 CONFIRMATION_PHRASE if REQUIRE_CONFIRMATION_TEXT else None
@@ -2466,7 +2472,8 @@ async def tg_send_file(
             }
 
     manager = await ctx.get_manager()
-    sent = await manager.send_file(group, path, caption=clean_caption)
+    options = {"force_document": True} if force_document else {}
+    sent = await manager.send_file(group, path, caption=clean_caption, **options)
     if sent:
         _mark_action_executed(action_hash)
         return {
@@ -2475,6 +2482,7 @@ async def tg_send_file(
             "file_path": path,
             "file_size_mb": round(file_size_mb, 3),
             "caption_len": len(clean_caption),
+            "force_document": force_document,
             "action_hash": action_hash,
         }
 
