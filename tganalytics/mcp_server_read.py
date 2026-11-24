@@ -374,5 +374,9 @@ async def tg_auth_status() -> dict:
     return await ctx.auth_status()
 
 
+from mcp_channel_publishing import register_read
+register_read(mcp, ctx)
+
+
 if __name__ == "__main__":
     mcp.run(transport="stdio")
