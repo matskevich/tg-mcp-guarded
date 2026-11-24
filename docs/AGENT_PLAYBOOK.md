@@ -128,3 +128,25 @@ deletes, member actions and new targets use the normal approval flows.
 - Never bypass MCP with direct Telethon writes from shell scripts.
 - Never disable allowlist/confirmation/approval/idempotency in production.
 - Never run bulk writes without `dry_run` or explicit user confirmation.
+
+
+## minimal channel publishing access
+
+read `tg_get_channel_member_rights` through the read actor with exact channel,
+member and actor ids. `tg_set_channel_publisher` in ActionMCP can grant or revoke
+only `post_messages` on a broadcast channel. it rejects broader existing roles
+instead of silently removing unrelated grants. bind `expected_state_hash` from
+the read, keep the existing allowlist, dry-run approval code, exact confirmation,
+process guard and duplicate window. after a timeout reconcile through read;
+there is no forced retry. creating the capability grants no owner authority.
+verify through a separate read actor and the intended recipient's consumer;
+never publish a test post solely to check permissions.
+
+Telegram may normalize requested admin flags. A successful RPC is not proof of
+minimal effective access: compare the separate read actor's full rights list.
+The observed broadcast response can add `ban_users` despite sending only
+`post_messages`. Do not silently accept the wider role. The guarded tool can
+roll back its exact recent recorded grant with `enabled=false` and
+`rollback_of_state_hash` set to the original pre-grant read hash; the rollback
+has its own dry-run approval and current-state check. A stale/unrelated grant
+cannot use this path. Preserve the observed flags and the verified final state.
