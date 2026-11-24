@@ -47,10 +47,13 @@ async def inspect_member(ctx, group, user, channel_id, user_id, actor_id):
     return client, channel, member, {"success": True, **role, "state_hash": role_digest(role)}
 
 
-def minimal_role(role, enabled):
+def minimal_role(role, enabled, accept_platform_ban_users=False):
     # 'other' is Telegram's implied management flag; it grants no named capability.
     rights = role["admin_rights"]
-    extras = [key for key, value in rights.items() if value and key not in {"post_messages", "other"}]
+    allowed = {"post_messages", "other"}
+    if accept_platform_ban_users:
+        allowed.add("ban_users")
+    extras = [key for key, value in rights.items() if value and key not in allowed]
     if extras or role["participant_type"] not in {"ChannelParticipant", "ChannelParticipantSelf", "ChannelParticipantAdmin"}:
         raise ValueError("Existing role is outside minimal publisher scope; no implicit revocation")
     return bool(rights.get("post_messages")) == enabled
@@ -76,13 +79,16 @@ def register_actions(api):
     @mcp.tool()
     async def tg_set_channel_publisher(group: str, user: str, expected_channel_id: int,
             expected_user_id: int, expected_actor_id: int, expected_state_hash: str,
-            enabled: bool = True, rollback_of_state_hash: str = "",
+            enabled: bool = True, accept_platform_ban_users: bool = False,
+            rollback_of_state_hash: str = "",
             dry_run: bool = True, confirm: bool = False,
             confirmation_text: str = "", approval_code: str = "") -> dict:
         """Grant/revoke only post_messages on an exact broadcast channel.
 
         Refuses existing broader roles, stale previews and forced unknown retries.
         Uses existing allowlist, process, approval and idempotency guards.
+        accept_platform_ban_users requires separate explicit owner authority for
+        the observed extra effective right; it is bound into the approval hash.
         """
         if str(expected_channel_id) != group or len(expected_state_hash) != 64:
             return api["_blocked"]("Exact numeric allowlisted channel and role state hash required")
@@ -94,6 +100,8 @@ def register_actions(api):
                    "channel_id": expected_channel_id, "user_id": expected_user_id,
                    "actor_id": expected_actor_id, "state_hash": expected_state_hash,
                    "enabled": enabled}
+        if accept_platform_ban_users:
+            payload["accept_platform_ban_users"] = True
         if rollback_of_state_hash:
             payload["rollback_of_state_hash"] = rollback_of_state_hash
         action_hash = api["_hash_payload"](payload)
@@ -124,7 +132,7 @@ def register_actions(api):
                     raise ValueError("Rollback must match this target's recorded grant")
                 no_op = not before["admin_rights"]
             else:
-                no_op = minimal_role(before, enabled)
+                no_op = minimal_role(before, enabled, accept_platform_ban_users)
             actor = await _safe_api_call(client, GetParticipantRequest(channel, "me"))
             actor_rights = getattr(actor.participant, "admin_rights", None)
             if (type(actor.participant).__name__ != "ChannelParticipantCreator"
@@ -145,7 +153,7 @@ def register_actions(api):
                 ChatAdminRights(post_messages=True) if enabled else ChatAdminRights(), ""))
             _, _, _, after = await inspect_member(api["ctx"], group, user,
                 expected_channel_id, expected_user_id, expected_actor_id)
-            verified = minimal_role(after, enabled)
+            verified = minimal_role(after, enabled, accept_platform_ban_users)
             return {**result, "success": verified, "submitted": True, "after": after,
                     "read_back_verified": verified, "reconciliation_required": not verified}
         except Exception as exc:

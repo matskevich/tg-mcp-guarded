@@ -143,3 +143,18 @@ async def test_server_extra_right_can_only_rollback_recorded_exact_grant():
     assert not (await fn(**args,enabled=False,rollback_of_state_hash='0'*64,dry_run=False))['success']
     r=await fn(**args,enabled=False,rollback_of_state_hash=original_args['expected_state_hash'],dry_run=False)
     assert r['success'] and not r['after']['admin_rights'].get('post_messages')
+
+
+@pytest.mark.asyncio
+async def test_platform_ban_acceptance_is_explicit_and_payload_bound():
+    c,ctx,api,marks=setup();args=await args_for(ctx);fn=mod.register_actions(api)
+    normal=await fn(**args);approved=await fn(**args,accept_platform_ban_users=True)
+    assert normal['action_hash']!=approved['action_hash']
+    original=c.side_effect
+    async def normalized(req):
+        if isinstance(req,EditAdminRequest):req.admin_rights.ban_users=True
+        return await original(req)
+    c.side_effect=normalized
+    r=await fn(**args,accept_platform_ban_users=True,dry_run=False)
+    assert r['success'] and r['after']['admin_rights']['ban_users']
+    assert not any(r['after']['admin_rights'].get(k) for k in ['add_admins','edit_messages','delete_messages'])

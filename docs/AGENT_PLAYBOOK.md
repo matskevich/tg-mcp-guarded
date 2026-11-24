@@ -150,3 +150,8 @@ roll back its exact recent recorded grant with `enabled=false` and
 `rollback_of_state_hash` set to the original pre-grant read hash; the rollback
 has its own dry-run approval and current-state check. A stale/unrelated grant
 cannot use this path. Preserve the observed flags and the verified final state.
+
+If the owner separately accepts the observed additional `ban_users` capability,
+`accept_platform_ban_users=true` permits that exact effective flag during
+verification. This changes the signed approval payload. Keep it false under an
+ordinary publication-only mandate; tool availability is not authorization.
