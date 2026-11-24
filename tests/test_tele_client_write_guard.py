@@ -195,3 +195,10 @@ def test_get_client_for_session_uses_runtime_copy_when_enabled(monkeypatch, tmp_
 
     assert value == "shadow-copy-ok"
     assert runtime_session_file != source.resolve()
+
+
+def test_acknowledgement_is_write_but_reaction_catalog_is_read():
+    assert tele_client._is_telethon_write_request(
+        _dummy_request('telethon.tl.functions.messages', 'SendReactionRequest')) is True
+    assert tele_client._is_telethon_write_request(
+        _dummy_request('telethon.tl.functions.messages', 'GetAvailableReactionsRequest')) is False

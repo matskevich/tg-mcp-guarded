@@ -128,3 +128,17 @@ deletes, member actions and new targets use the normal approval flows.
 - Never bypass MCP with direct Telethon writes from shell scripts.
 - Never disable allowlist/confirmation/approval/idempotency in production.
 - Never run bulk writes without `dry_run` or explicit user confirmation.
+
+## acknowledgement reactions
+
+`tg_acknowledge_message` is an optional provider-owned ActionMCP tool registered
+from `mcp_reactions.py`. it adds a standard 👾/👀/🤖 acknowledgement only if the
+account has no existing reaction on that message. it never overwrites a human
+reaction. a reaction means seen/considered, not agreement or task completion.
+
+keep the normal exact-target policy, dry-run approval, exact confirmation,
+idempotency and process guards. unknown writes must be reconciled with
+`tg_get_message_reactions` from an independent ReadMCP. no force resend is
+provided. `tg_get_available_reactions` checks active standard emoji without
+purchasing custom reactions. consumers must verify their own account/catalog
+and independent readback before calling the extension live.

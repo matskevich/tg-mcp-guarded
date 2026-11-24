@@ -399,5 +399,9 @@ async def tg_get_forum_topics(group: str, limit: int = 100) -> dict:
                         "pinned": bool(getattr(t, "pinned", False))} for t in topics]}
 
 
+from mcp_reactions import register_reads  # noqa: E402
+register_reads(globals())
+
+
 if __name__ == "__main__":
     mcp.run(transport="stdio")
