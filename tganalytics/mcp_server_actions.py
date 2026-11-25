@@ -1021,6 +1021,59 @@ def _create_leave_dialog_batch_record(
 
 
 @mcp.tool()
+async def tg_migrate_basic_group(
+    group: str,
+    expected_title: str,
+    dry_run: bool = True,
+    confirm: bool = False,
+    confirmation_text: str = "",
+    approval_code: str = "",
+) -> dict:
+    """Irreversibly upgrade an exact basic group to a private supergroup.
+
+    Does not change members, permissions, allowlists or automation targets.
+    Always reconcile an uncertain result before another attempt.
+    """
+    if not (group.startswith("-") and group[1:].isdigit()) or not expected_title.strip():
+        return _blocked("Exact negative group ID and expected_title required")
+    allowed, error = _check_action_preconditions(
+        group, dry_run=dry_run, confirm=confirm, confirmation_text=confirmation_text
+    )
+    if not allowed:
+        return _blocked(error or "preconditions failed")
+    action_hash = _hash_payload({"action": "migrate_basic_group", "target": group,
+                                 "expected_title": expected_title})
+    ok, error, meta = _approval_gate(action_hash=action_hash, dry_run=dry_run,
+                                     approval_code=approval_code)
+    if not ok:
+        return _blocked(error or "approval blocked")
+    if not dry_run:
+        duplicate, retry = _check_recent_duplicate(action_hash)
+        if duplicate:
+            return {"success": False, "duplicate_blocked": True,
+                    "retry_after_sec": retry, "error": "Reconcile prior migration; no forced retry."}
+    manager = await ctx.get_manager()
+    try:
+        # Validate permissions before reserving an irreversible execution.
+        preview = await manager.migrate_basic_group(group, expected_title, dry_run=True)
+        if not preview.get("success"):
+            return preview
+        if dry_run:
+            result = preview
+        else:
+            _mark_action_executed(action_hash)
+            result = await manager.migrate_basic_group(group, expected_title, dry_run=False)
+    except Exception as exc:
+        return {"success": False, "error": str(exc), "dry_run": dry_run,
+                "reconciliation_required": not dry_run, "action_hash": action_hash}
+    if dry_run and meta:
+        result.update(meta)
+    result["action_hash"] = action_hash
+    result["confirmation_text_required"] = CONFIRMATION_PHRASE if REQUIRE_CONFIRMATION_TEXT else None
+    return result
+
+
+@mcp.tool()
 async def tg_create_private_group(
     title: str,
     users: list[str] | None = None,
@@ -1037,8 +1090,8 @@ async def tg_create_private_group(
     if not clean_title:
         return _blocked("title is empty")
     group_kind = str(kind or "basic").strip().lower()
-    if group_kind not in {"basic", "supergroup"}:
-        return _blocked("kind must be 'basic' or 'supergroup'")
+    if group_kind not in {"basic", "supergroup", "forum"}:
+        return _blocked("kind must be 'basic', 'supergroup' or 'forum'")
 
     can_run, error = _check_action_preconditions(
         clean_title,
@@ -1103,6 +1156,112 @@ async def tg_create_private_group(
         CONFIRMATION_PHRASE if REQUIRE_CONFIRMATION_TEXT else None
     )
     return result
+
+
+
+@mcp.tool()
+async def tg_create_forum_topic(
+    group: str, title: str, dry_run: bool = True, confirm: bool = False,
+    confirmation_text: str = "", approval_code: str = "",
+) -> dict:
+    """Create one topic in an exact private forum; reconcile unknown effects before retry."""
+    from telethon.tl.functions.channels import CreateForumTopicRequest
+    if not (group.startswith("-100") and group[1:].isdigit()) or not 0 < len(title.strip()) <= 128:
+        return _blocked("Exact supergroup ID and title (1..128 characters) required")
+    can_run, error = _check_action_preconditions(group, dry_run=dry_run, confirm=confirm,
+                                                confirmation_text=confirmation_text)
+    if not can_run:
+        return _blocked(error or "preconditions failed")
+    action_hash = _hash_payload({"action": "create_forum_topic", "target": group, "title": title.strip()})
+    ok, error, meta = _approval_gate(action_hash=action_hash, dry_run=dry_run, approval_code=approval_code)
+    if not ok:
+        return _blocked(error or "approval blocked")
+    manager = await ctx.get_manager()
+    entity = await manager._resolve_target_entity(group)
+    if not getattr(entity, "forum", False) or not getattr(entity, "creator", False):
+        return _blocked("Target must be an owner-created forum")
+    if dry_run:
+        return {"success": True, "dry_run": True, "target": group, "title": title.strip(),
+                "action_hash": action_hash, "confirmation_text_required": CONFIRMATION_PHRASE, **(meta or {})}
+    duplicate, retry = _check_recent_duplicate(action_hash)
+    if duplicate:
+        return {"success": False, "duplicate_blocked": True, "retry_after_sec": retry}
+    _mark_action_executed(action_hash)
+    try:
+        updates = await safe_call(ctx.client, CreateForumTopicRequest(channel=entity, title=title.strip()), operation_type="group_msg")
+        ids = [u.message.id for u in getattr(updates, "updates", []) if getattr(getattr(u, "message", None), "action", None).__class__.__name__ == "MessageActionTopicCreate"]
+        return {"success": bool(ids), "dry_run": False, "target": group, "topic_id": ids[0] if ids else None,
+                "reconciliation_required": not bool(ids), "action_hash": action_hash}
+    except Exception as exc:
+        return {"success": False, "error": str(exc), "reconciliation_required": True, "action_hash": action_hash}
+
+
+@mcp.tool()
+async def tg_edit_forum_topic(
+    group: str, topic_id: int, expected_title: str, title: str | None = None,
+    closed: bool | None = None, hidden: bool | None = None, pinned: bool | None = None,
+    dry_run: bool = True, confirm: bool = False,
+    confirmation_text: str = "", approval_code: str = "",
+) -> dict:
+    """Reversibly rename, close, hide General or pin an exact owner forum topic.
+
+    History is preserved. Read current title first. Unknown outcomes require
+    independent topic readback before any retry; no force-resend override.
+    """
+    from telethon.tl.functions.channels import (
+        EditForumTopicRequest, GetForumTopicsByIDRequest, UpdatePinnedForumTopicRequest,
+    )
+    if (not (group.startswith("-100") and group[1:].isdigit()) or topic_id < 1
+            or not expected_title or all(v is None for v in (title, closed, hidden, pinned))
+            or (title is not None and not 0 < len(title.strip()) <= 128)
+            or (hidden is not None and topic_id != 1)):
+        return _blocked("Exact forum/topic, expected title and valid change required; only General may be hidden")
+    can_run, error = _check_action_preconditions(
+        group, dry_run=dry_run, confirm=confirm, confirmation_text=confirmation_text)
+    if not can_run:
+        return _blocked(error or "preconditions failed")
+    payload = dict(action="edit_forum_topic", target=group, topic_id=topic_id,
+                   expected_title=expected_title, title=title.strip() if title is not None else None,
+                   closed=closed, hidden=hidden, pinned=pinned)
+    action_hash = _hash_payload(payload)
+    ok, error, meta = _approval_gate(action_hash=action_hash, dry_run=dry_run, approval_code=approval_code)
+    if not ok:
+        return _blocked(error or "approval blocked")
+    manager = await ctx.get_manager()
+    entity = await manager._resolve_target_entity(group)
+    if not getattr(entity, "forum", False) or not getattr(entity, "creator", False):
+        return _blocked("Target must be an owner-created forum")
+    current = await safe_call(ctx.client, GetForumTopicsByIDRequest(channel=entity, topics=[topic_id]), operation_type="api")
+    topic = next((t for t in current.topics if t.id == topic_id), None)
+    if topic is None or getattr(topic, "title", None) != expected_title:
+        return _blocked("Topic missing or changed; read current source before a new preview")
+    if dry_run:
+        return dict(success=True, dry_run=True, changes=payload, action_hash=action_hash,
+                    confirmation_text_required=CONFIRMATION_PHRASE, **(meta or {}))
+    duplicate, retry = _check_recent_duplicate(action_hash)
+    if duplicate:
+        return dict(success=False, duplicate_blocked=True, retry_after_sec=retry)
+    # Fence all attempted effects, including partial RPC success / lost responses.
+    _mark_action_executed(action_hash)
+    try:
+        # Telegram requires closing separately from title/visibility changes.
+        if title is not None:
+            await safe_call(ctx.client, EditForumTopicRequest(
+                channel=entity, topic_id=topic_id, title=payload["title"]),
+                operation_type="group_msg", max_retries=0)
+        if closed is not None:
+            await safe_call(ctx.client, EditForumTopicRequest(
+                channel=entity, topic_id=topic_id, closed=closed), operation_type="group_msg", max_retries=0)
+        if hidden is not None:
+            await safe_call(ctx.client, EditForumTopicRequest(
+                channel=entity, topic_id=topic_id, hidden=hidden), operation_type="group_msg", max_retries=0)
+        if pinned is not None:
+            await safe_call(ctx.client, UpdatePinnedForumTopicRequest(
+                channel=entity, topic_id=topic_id, pinned=pinned), operation_type="group_msg", max_retries=0)
+        return dict(success=True, dry_run=False, target=group, topic_id=topic_id,
+                    action_hash=action_hash, independent_readback_required=True)
+    except Exception as exc:
+        return dict(success=False, error=str(exc), reconciliation_required=True, action_hash=action_hash)
 
 
 @mcp.tool()
@@ -4099,6 +4258,8 @@ async def tg_auth_status() -> dict:
     return await ctx.auth_status()
 
 
+from mcp_private_channel import register_actions as register_private_channel
+register_private_channel(globals())
 from mcp_channel_publishing import register_actions
 register_actions(globals())
 

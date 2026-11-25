@@ -105,7 +105,7 @@ def test_detect_live_session_conflict_same_profile_same_session(monkeypatch, tmp
             '"pid": 111, '
             '"profile": "read", '
             f'"session_path": "{session_path}", '
-            '"updated_at": 1'
+            f'"updated_at": {int(time.time())}'
             "}"
             "}}"
         ),
