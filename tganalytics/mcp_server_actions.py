@@ -4250,6 +4250,10 @@ async def tg_auth_status() -> dict:
     return await ctx.auth_status()
 
 
+from mcp_private_channel import register_actions as register_private_channel
+register_private_channel(globals())
+
+
 if __name__ == "__main__":
     # Transport is env-selectable so one shared HTTP instance can serve many MCP
     # clients: the actions profile claims the Telegram session exclusively, so a
