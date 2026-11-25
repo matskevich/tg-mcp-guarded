@@ -75,3 +75,29 @@ async def test_missing_message_is_unknown_not_empty_reactions():
     ns['safe_call'].return_value = None
     with pytest.raises(ValueError, match='unavailable'):
         await read_reactions(ns, '20', 42)
+
+
+@pytest.mark.asyncio
+async def test_exact_annotations_expose_quote_and_external_reply_without_writes():
+    import hashlib
+    from telethon.tl.types import MessageEntityBlockquote, PeerChannel
+    from mcp_reactions import register_reads
+    ns, _ = namespace()
+    ns['safe_call'].return_value = S(id=42, sender_id=20, message='агентик помоги',
+        entities=[MessageEntityBlockquote(offset=0, length=14)],
+        reply_to=S(reply_to_msg_id=7, reply_to_peer_id=PeerChannel(channel_id=99)),
+        fwd_from=None, via_bot_id=None)
+    tools = {}
+    class MCP:
+        def tool(self):
+            def bind(fn):
+                tools[fn.__name__] = fn
+                return fn
+            return bind
+    ns['mcp'] = MCP()
+    register_reads(ns)
+    result = await tools['tg_get_message_annotations']('20', 42)
+    assert result['leading_quote'] and result['sender_id'] == 20
+    assert result['reply_peer_id'] == -1000000000099
+    assert result['text_sha256'] == hashlib.sha256('агентик помоги'.encode()).hexdigest()
+    assert ns['safe_call'].call_args.kwargs['operation_type'] == 'api'

@@ -1,4 +1,8 @@
-"""Small, guarded acknowledgement reactions; never replace an owner's reaction."""
+"""Small, guarded acknowledgement reactions and exact read-only message annotations."""
+
+import hashlib
+
+from telethon import utils
 
 from telethon.tl.functions.messages import (
     GetAvailableReactionsRequest,
@@ -21,6 +25,30 @@ async def read_reactions(ns, group, message_id):
 
 
 def register_reads(ns):
+    @ns["mcp"].tool()
+    async def tg_get_message_annotations(group: str, message_id: int) -> dict:
+        """Read exact sender, quote and reply annotations without granting action authority."""
+        if message_id <= 0:
+            return {"error": "positive message_id required"}
+        manager = await ns["ctx"].get_manager()
+        entity = await manager._resolve_read_entity(group, allow_users=True)
+        message = await ns["safe_call"](
+            ns["ctx"].client.get_messages, entity, ids=message_id, operation_type="api")
+        if not message or message.id != message_id:
+            return {"observed": False, "message_id": message_id}
+        body = message.message or ""
+        first = len(body) - len(body.lstrip())
+        leading_quote = any(
+            type(e).__name__ in {"MessageEntityBlockquote", "MessageEntityPre", "MessageEntityCode"}
+            and e.offset <= first < e.offset + e.length for e in (message.entities or []))
+        header = message.reply_to
+        reply_peer = getattr(header, "reply_to_peer_id", None)
+        return {"observed": True, "message_id": message.id, "sender_id": message.sender_id,
+                "text_sha256": hashlib.sha256(body.encode()).hexdigest(),
+                "leading_quote": leading_quote, "forwarded": bool(message.fwd_from or message.via_bot_id),
+                "reply_to_msg_id": getattr(header, "reply_to_msg_id", None),
+                "reply_peer_id": utils.get_peer_id(reply_peer) if reply_peer else None}
+
     @ns["mcp"].tool()
     async def tg_get_message_reactions(group: str, message_id: int) -> dict:
         """Read the logged-in account's reactions to one exact message."""
