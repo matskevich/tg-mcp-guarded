@@ -397,6 +397,8 @@ async def tg_get_forum_topics(group: str, limit: int = 100) -> dict:
                         "closed": bool(getattr(t, "closed", False)),
                         "hidden": bool(getattr(t, "hidden", False)),
                         "pinned": bool(getattr(t, "pinned", False))} for t in topics]}
+from mcp_channel_publishing import register_read
+register_read(mcp, ctx)
 
 
 if __name__ == "__main__":

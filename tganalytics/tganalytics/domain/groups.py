@@ -1844,17 +1844,22 @@ class GroupManager:
             return False
 
     async def send_file(
-        self, group_identifier: Union[str, int], file_path: str, caption: str = ""
+        self, group_identifier: Union[str, int], file_path: str, caption: str = "",
+        force_document: bool = False
     ) -> bool:
         """Отправляет файл в группу/чат с антиспам защитой."""
         try:
+            if type(force_document) is not bool:
+                return False
             entity = await self._resolve_target_entity(group_identifier)
+            send_options = {"force_document": True} if force_document else {}
             await _safe_api_call(
                 self.client.send_file,
                 entity,
                 file_path,
                 caption=caption,
                 operation_type="group_msg",
+                **send_options,
             )
             logger.info(f"Файл успешно отправлен в группу {group_identifier}")
             return True

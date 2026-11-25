@@ -14,16 +14,25 @@ class LocalQuotaExceeded(Exception):
     """An application budget blocked a call before sending it to Telegram."""
 
 
+def _parse_limit(value):
+    if str(value).strip().lower() == 'unlimited':
+        return None
+    limit = int(value)
+    if limit < 0:
+        raise ValueError('conversation limits must be nonnegative or unlimited')
+    return limit
+
+
 class ReplyBudget:
     def __init__(self, directory, *, total=None, per_target=None, interval=None):
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.path = self.directory / 'conversation_reply_budget.json'
         self.lock = self.directory / 'conversation_reply_budget.lock'
-        self.total = int(os.getenv('MAX_CONVERSATION_REPLIES_PER_DAY', '100') if total is None else total)
-        self.per_target = int(os.getenv('MAX_CONVERSATION_REPLIES_PER_TARGET', '20') if per_target is None else per_target)
+        self.total = _parse_limit(os.getenv('MAX_CONVERSATION_REPLIES_PER_DAY', '100') if total is None else total)
+        self.per_target = _parse_limit(os.getenv('MAX_CONVERSATION_REPLIES_PER_TARGET', '20') if per_target is None else per_target)
         self.interval = float(os.getenv('CONVERSATION_REPLY_MIN_INTERVAL_SEC', '10') if interval is None else interval)
-        if self.total < 0 or self.per_target < 0 or self.interval < 0:
+        if self.interval < 0:
             raise ValueError('conversation budget values must be nonnegative')
 
     def _load(self, now):
@@ -56,9 +65,9 @@ class ReplyBudget:
             fcntl.flock(fd, fcntl.LOCK_EX)
             data = self._load(now)
             row = data['targets'].get(target, {'used': 0, 'last': 0})
-            if data['used'] >= self.total:
+            if self.total is not None and data['used'] >= self.total:
                 raise LocalQuotaExceeded(f'conversation_reply: daily budget {data["used"]}/{self.total}; resets at 00:00 UTC')
-            if row['used'] >= self.per_target:
+            if self.per_target is not None and row['used'] >= self.per_target:
                 raise LocalQuotaExceeded(f'conversation_reply: per_target budget {row["used"]}/{self.per_target}; resets at 00:00 UTC')
             wait = self.interval - (now - row['last'])
             if row['used'] and wait > 0:
