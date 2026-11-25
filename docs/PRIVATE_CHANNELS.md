@@ -18,3 +18,18 @@ tool's explicit authority requirement before accepting those additional rights.
 
 new processes of the installed ActionMCP launcher discover the tool without a
 service restart. no new credential consumer or direct Telethon write path is used.
+
+## shared owner catalog
+
+`mcp_private_channel_provider.py` exposes the same creation arguments and a
+read-only account status to the existing `agent-infra` entry. this adapter uses
+the installed `op-agents` profile, then scopes the exact title in the child env.
+preview/confirmation arguments pass unchanged; it never approves an action itself.
+only channel creation and account status can be dispatched through this adapter.
+
+publish these two exact tools on the owner resource `telegram-channels`, with
+separate grants for existing owner consumers. preserve their other resources.
+clients use discover → describe → status → creation preview, then an owner-authorized
+native confirmation. delivery tests can stop at preview; creating a smoke channel
+requires its own owner instruction. previously opened native tool lists may stay
+cached; shared discovery reads the current catalog on every call.
