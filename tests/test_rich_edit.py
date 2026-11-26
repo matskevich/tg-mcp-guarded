@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 from telethon.tl.functions.messages import EditMessageRequest
-from test_rich_publication import action_api, content
+from tests.test_rich_publication import action_api, content
 import mcp_rich_edit as edit
 from mcp_rich_publication import ledger, reconcile_rich
 
