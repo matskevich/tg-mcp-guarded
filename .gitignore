@@ -56,3 +56,6 @@ data/
 .mcp.local.json
 security-report.json
 bandit-report.json
+
+# isolated development and private acceptance receipts
+.private/

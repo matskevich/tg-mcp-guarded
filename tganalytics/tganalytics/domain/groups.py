@@ -161,9 +161,7 @@ class GroupManager:
         try:
             if isinstance(group_identifier, int):
                 entity_id: Union[str, int] = group_identifier
-            elif isinstance(group_identifier, str) and (
-                group_identifier.startswith("-") and group_identifier[1:].isdigit()
-            ):
+            elif isinstance(group_identifier, str) and group_identifier.lstrip("-").isdigit():
                 entity_id = int(group_identifier)
             else:
                 entity_id = (
@@ -636,7 +634,7 @@ class GroupManager:
                     **iter_kwargs,
                 ):
                     # Пропускаем служебные сообщения
-                    if not msg.message and not msg.media:
+                    if not msg.message and not msg.media and not getattr(msg, "rich_message", None):
                         continue
 
                     messages.append(self._message_to_record(msg))
@@ -744,6 +742,15 @@ class GroupManager:
             "buttons": cls._message_buttons_to_records(msg),
         }
         record.update(cls._media_metadata(msg))
+        rich = getattr(msg, "rich_message", None)
+        if rich is not None:
+            from tganalytics.infra.rich_messages import projection, transport, digest
+            record["rich_message"] = transport(rich)
+            record["rich_sha256"] = digest(rich)
+            record["content_complete"] = not bool(getattr(rich, "part", False))
+            record.update(projection(rich))
+        elif record["media_type"] == "MessageMediaUnsupported":
+            record.update(content_complete=False, error_code="unsupported_message_format")
         return record
 
     async def get_messages_since(
@@ -779,7 +786,7 @@ class GroupManager:
                         if msg_naive < cutoff_dt:
                             break
 
-                    if not msg.message and not msg.media:
+                    if not msg.message and not msg.media and not getattr(msg, "rich_message", None):
                         continue
 
                     messages.append(self._message_to_record(msg))
@@ -841,7 +848,7 @@ class GroupManager:
                         break
                     if to_dt and msg_dt and msg_dt > to_dt:
                         continue
-                    if not msg.message and not msg.media:
+                    if not msg.message and not msg.media and not getattr(msg, "rich_message", None):
                         continue
                     messages.append(self._message_to_record(msg))
                 return messages
@@ -935,7 +942,7 @@ class GroupManager:
                         break
                     if to_dt and msg_dt and msg_dt > to_dt:
                         continue
-                    if not msg.message and not msg.media:
+                    if not msg.message and not msg.media and not getattr(msg, "rich_message", None):
                         continue
                     messages.append(await self._message_to_record_with_dialog(msg))
                 return messages

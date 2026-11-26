@@ -374,12 +374,43 @@ async def tg_auth_status() -> dict:
     return await ctx.auth_status()
 
 
+@mcp.tool()
+async def tg_get_full_message(group: str, message_id: int, text_offset: int = 0,
+                              text_limit: int = 16000) -> dict:
+    """Read exact full text/rich tree, media, entities and reply identity.
+
+    Follow next_text_offset until null. Offsets count Unicode code points.
+    projection_complete=false is explicit unsupported text rendering; the raw
+    rich tree remains available. A server-truncated rich tree is never complete.
+    """
+    from tganalytics.infra.rich_messages import full_message
+    if type(text_offset) is not int or text_offset < 0 or not 1 <= text_limit <= 64000:
+        return {"success": False, "error_code": "invalid_text_window"}
+    result = await full_message(await ctx.get_manager(), group, message_id)
+    text = result.get("text")
+    if isinstance(text, str):
+        end = min(len(text), text_offset + text_limit)
+        result.update(text=text[text_offset:end], text_offset=text_offset,
+                      text_length=len(text), next_text_offset=end if end < len(text) else None)
+    return result
+
+
+@mcp.tool()
+async def tg_get_discussion_root(channel: str, channel_post_id: int) -> dict:
+    """Resolve exact post to its forwarded linked-discussion root, not the post id.
+
+    Matches forward channel identity and channel_post; no write or read receipt.
+    """
+    from tganalytics.infra.rich_messages import discussion_root
+    return await discussion_root(await ctx.get_manager(), channel, channel_post_id)
+
+
 
 
 @mcp.tool()
 async def tg_get_forum_topics(group: str, limit: int = 100) -> dict:
     """Read bounded forum topic ids/titles and owner access independently of actions."""
-    from telethon.tl.functions.channels import GetForumTopicsRequest, GetForumTopicsByIDRequest
+    from tganalytics.infra.forum_schema import GetForumTopicsRequest, GetForumTopicsByIDRequest
     manager = await ctx.get_manager()
     entity = await manager._resolve_target_entity(group)
     result = await safe_call(ctx.client, GetForumTopicsRequest(channel=entity, offset_date=None,

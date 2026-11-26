@@ -1165,7 +1165,7 @@ async def tg_create_forum_topic(
     confirmation_text: str = "", approval_code: str = "",
 ) -> dict:
     """Create one topic in an exact private forum; reconcile unknown effects before retry."""
-    from telethon.tl.functions.channels import CreateForumTopicRequest
+    from tganalytics.infra.forum_schema import CreateForumTopicRequest
     if not (group.startswith("-100") and group[1:].isdigit()) or not 0 < len(title.strip()) <= 128:
         return _blocked("Exact supergroup ID and title (1..128 characters) required")
     can_run, error = _check_action_preconditions(group, dry_run=dry_run, confirm=confirm,
@@ -1208,7 +1208,7 @@ async def tg_edit_forum_topic(
     History is preserved. Read current title first. Unknown outcomes require
     independent topic readback before any retry; no force-resend override.
     """
-    from telethon.tl.functions.channels import (
+    from tganalytics.infra.forum_schema import (
         EditForumTopicRequest, GetForumTopicsByIDRequest, UpdatePinnedForumTopicRequest,
     )
     if (not (group.startswith("-100") and group[1:].isdigit()) or topic_id < 1
@@ -4256,6 +4256,46 @@ async def tg_get_stats() -> dict:
 async def tg_auth_status() -> dict:
     """Check whether current/default Telegram session is authorized."""
     return await ctx.auth_status()
+
+
+@mcp.tool()
+async def tg_send_rich_message(
+    group: str, rich_message: dict, operation_id: str, expected_actor_id: int,
+    expected_sender_id: int, send_as_id: int, reply_to_msg_id: int = 0,
+    discussion_channel: str = "", channel_post_id: int = 0,
+    dry_run: bool = True, confirm: bool = False,
+    confirmation_text: str = "", approval_code: str = "",
+) -> dict:
+    """Publish one complete native rich message; no splitting or fallback.
+
+    rich_message is an exact InputRichMessage/PageBlock/Text constructor tree.
+    Preview binds account, numeric target, send-as, optional verified linked root,
+    ordered blocks/media references and operation_id. Preserve this operation id
+    after an unknown response; use tg_reconcile_rich_message before any retry.
+    Existing ActionMCP allowlist/approval/process/confirmation guards apply.
+    """
+    from mcp_rich_publication import send_rich
+    try:
+        return await send_rich(globals(), group=group, rich_message=rich_message,
+            operation_id=operation_id, expected_actor_id=expected_actor_id,
+            expected_sender_id=expected_sender_id, send_as_id=send_as_id,
+            reply_to_msg_id=reply_to_msg_id, discussion_channel=discussion_channel,
+            channel_post_id=channel_post_id, dry_run=dry_run, confirm=confirm,
+            confirmation_text=confirmation_text, approval_code=approval_code)
+    except Exception as error:
+        return {"success": False, "error_code": "rich_action_failed",
+                "error_type": type(error).__name__, "reconciliation_required": not dry_run}
+
+
+@mcp.tool()
+async def tg_reconcile_rich_message(group: str, operation_id: str, message_id: int) -> dict:
+    """Read exact full rich message and reconcile reserved operation. Never sends.
+
+    Match target, sender, reply root and complete ordered block content. Missing
+    or mismatched evidence remains unknown, without authorizing automatic retry.
+    """
+    from mcp_rich_publication import reconcile_rich
+    return await reconcile_rich(globals(), group, operation_id, message_id)
 
 
 from mcp_private_channel import register_actions as register_private_channel
