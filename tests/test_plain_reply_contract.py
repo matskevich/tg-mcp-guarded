@@ -59,3 +59,44 @@ def test_unknown_ordinary_effect_survives_restart_and_force_does_not_release_it(
     again=reserve(path,'hash',{},force=True,window=0)
     assert again['error_code']=='prior_send_effect_unknown'
     assert again['receipt']['message_id']==99
+
+
+@pytest.mark.asyncio
+async def test_plain_reconcile_is_nonce_bound_exact_and_never_releases_unknown(monkeypatch,tmp_path):
+    from mcp_plain_guard import inspect_or_reconcile, operation
+    path=tmp_path/'idempotency.json'
+    peer=-1000000000020
+    payload={'action':'send_message','target':str(peer),'text':'exact text',
+             'identity':{'actor_id':10,'sender_id':10,'send_as_id':10,'peer_id':peer},
+             'reply_to_msg_id':98,'reply_target':{'peer_id':peer,'message_id':98}}
+    action_hash=actions._hash_payload(payload)
+    item=reserve(path,action_hash,payload,window=0)
+    finish(path,action_hash,item['nonce'],'unknown',{'message_id':99,'submitted':True})
+    message=types.Message(id=99,peer_id=types.PeerChannel(20),from_id=types.PeerUser(10),
+        message='exact text',date=datetime.now(timezone.utc),
+        reply_to=types.MessageReplyHeader(reply_to_msg_id=98))
+    client=SimpleNamespace(get_me=AsyncMock(return_value=SimpleNamespace(id=10)),
+                           get_messages=AsyncMock(return_value=message))
+    manager=SimpleNamespace(client=client,_resolve_target_entity=AsyncMock(return_value=types.PeerChannel(20)))
+    api={'ctx':SimpleNamespace(get_manager=AsyncMock(return_value=manager)),
+         'IDEMPOTENCY_FILE':path,'_normalize_target':actions._normalize_target,'_hash_payload':actions._hash_payload}
+    before=operation(path,action_hash)
+    inspected=await inspect_or_reconcile(api,str(peer),action_hash)
+    assert inspected['operation_id']==item['nonce']
+    with pytest.raises(ValueError,match='revision_mismatch'):
+        await inspect_or_reconcile(api,str(peer),action_hash,'wrong',99)
+    verified=await inspect_or_reconcile(api,str(peer),action_hash,item['nonce'],99)
+    assert verified['effect_status']=='verified' and verified['ledger_unchanged']
+    assert operation(path,action_hash)==before
+    assert not reserve(path,action_hash,payload,force=True,window=0)['allowed']
+    for mutation in ['sender','reply','text','missing']:
+        candidate=types.Message(id=99,peer_id=types.PeerChannel(20),from_id=types.PeerUser(10),
+            message='exact text',date=datetime.now(timezone.utc),reply_to=types.MessageReplyHeader(reply_to_msg_id=98))
+        if mutation=='sender':candidate.from_id=types.PeerUser(11)
+        if mutation=='reply':candidate.reply_to.reply_to_msg_id=97
+        if mutation=='text':candidate.message='changed'
+        if mutation=='missing':candidate=type('MessageEmpty',(),{'id':99})()
+        client.get_messages.return_value=candidate
+        out=await inspect_or_reconcile(api,str(peer),action_hash,item['nonce'],99)
+        assert out['effect_status']=='unknown' and not out['automatic_retry_allowed']
+    assert operation(path,action_hash)==before

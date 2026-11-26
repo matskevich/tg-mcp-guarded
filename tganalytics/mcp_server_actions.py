@@ -4378,6 +4378,25 @@ from mcp_channel_publishing import register_actions
 register_actions(globals())
 
 
+
+@mcp.tool()
+async def tg_get_plain_operation(group: str, action_hash: str) -> dict:
+    """Inspect the exact durable ordinary operation; read only, never releases retry fences."""
+    from mcp_plain_guard import inspect_or_reconcile
+    return await inspect_or_reconcile(globals(), group, action_hash)
+
+
+@mcp.tool()
+async def tg_reconcile_plain_message(group: str, action_hash: str, operation_id: str, message_id: int) -> dict:
+    """Read exact existing ordinary effect against frozen reservation/actor/sender/reply/text.
+
+    Never sends, edits, deletes, changes the ledger or releases unknown retry fencing.
+    Missing/unsupported/mismatched content stays unknown, never proof of absence.
+    """
+    from mcp_plain_guard import inspect_or_reconcile
+    return await inspect_or_reconcile(globals(), group, action_hash, operation_id, message_id)
+
+
 if __name__ == "__main__":
     # Transport is env-selectable so one shared HTTP instance can serve many MCP
     # clients: the actions profile claims the Telegram session exclusively, so a
