@@ -61,3 +61,23 @@ private deployment and test receipts belong in the owning infrastructure issue.
 roll back the new actor/catalog route only; preserve existing actors, sessions,
 ordinary sends and unknown operation records. deleting test messages is a
 separate exact guarded action, not an implicit rollback.
+
+### saved messages sender and rejected-attempt recovery
+
+for a verified self target with actor and displayed sender equal to that self
+id, the native request omits `send_as`: telegram rejects an explicit sender on
+saved messages. the exact actor/sender remains in the approved payload and full
+readback. other target identities still use the explicit requested sender.
+
+`SendAsPeerInvalidError` is a definite provider rejection, recorded durably as
+`rejected`; no message was created by that RPC. a fresh exact preview and one-time
+approval are required before a same-operation attempt. timeouts and all other
+unclassified errors retain their unknown reservation and cannot be retried here.
+concurrent claim of a rejected attempt is atomic; it cannot dispatch twice.
+
+for historical receipts from versions that recorded this specific rejection as
+unknown, the operator may use `scripts/reconcile_rich_rejection.py` with the
+trusted private native receipt, exact operation id and existing ledger. it checks
+error type, action hash, unsent state and absence of a known message, and retains
+the receipt hash in `rejection_receipts`. it makes no telegram call and cannot
+release a timeout, changed payload or sent operation. receipt paths remain private.

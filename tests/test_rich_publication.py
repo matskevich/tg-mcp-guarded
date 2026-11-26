@@ -154,6 +154,69 @@ def arguments():
 
 
 @pytest.mark.asyncio
+async def test_self_send_omits_invalid_send_as_but_keeps_approved_identity(tmp_path, monkeypatch):
+    async def once(func, *args, **kwargs):
+        return await func(*args)
+    monkeypatch.setattr(publication, "safe_call", once)
+    calls = []
+    api = action_api(tmp_path, calls)
+    preview = await publication.send_rich(api, **arguments())
+    assert preview["actor_id"] == preview["send_as_id"] == 10
+    await publication.send_rich(api, **arguments(), dry_run=False, confirm=True,
+                                approval_code=preview["approval_code"])
+    assert len(calls) == 1
+    assert calls[0].send_as is None
+
+
+@pytest.mark.asyncio
+async def test_definite_sender_rejection_needs_new_approval_and_unknown_stays_fenced(tmp_path, monkeypatch):
+    from telethon.errors import SendAsPeerInvalidError
+    count = 0
+    async def rejected(*args, **kwargs):
+        nonlocal count
+        count += 1
+        raise SendAsPeerInvalidError(request=None)
+    monkeypatch.setattr(publication, "safe_call", rejected)
+    api = action_api(tmp_path, [])
+    preview = await publication.send_rich(api, **arguments())
+    out = await publication.send_rich(api, **arguments(), dry_run=False, confirm=True,
+                                     approval_code=preview["approval_code"])
+    assert out["state"] == "rejected" and out["effect_status"] == "not_performed"
+    assert out["automatic_retry_allowed"] is False
+    # A new process has no old approval. Rejection alone never authorizes retry.
+    other = action_api(tmp_path, [])
+    denied = await publication.send_rich(other, **arguments(), dry_run=False, confirm=True,
+                                        approval_code="stale")
+    assert denied["success"] is False and count == 1
+    fresh = await publication.send_rich(other, **arguments())
+    assert fresh["dry_run"] is True
+    out = await publication.send_rich(other, **arguments(), dry_run=False, confirm=True,
+                                     approval_code=fresh["approval_code"])
+    assert count == 2 and out["state"] == "rejected"
+
+
+def test_historical_rejection_migration_cannot_release_unknown_or_changed_operation(tmp_path):
+    import importlib.util
+    from pathlib import Path
+    path = Path(__file__).parents[1] / "scripts/reconcile_rich_rejection.py"
+    spec = importlib.util.spec_from_file_location("rejection_migration", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    api = action_api(tmp_path, [])
+    with publication.ledger(api) as db:
+        db.execute("INSERT INTO operations(id,hash,payload,state) VALUES ('op','hash','{}','reserved')")
+    receipt = tmp_path / "receipt.json"
+    base = {"action_hash": "hash", "submitted": True, "state": "unknown"}
+    for error, action_hash in [("TimeoutError", "hash"), ("SendAsPeerInvalidError", "wrong")]:
+        receipt.write_text(json.dumps({**base, "error_type": error, "action_hash": action_hash}))
+        with pytest.raises(ValueError):
+            module.reconcile(tmp_path / "rich_publication.sqlite", receipt, "op")
+    receipt.write_text(json.dumps({**base, "error_type": "SendAsPeerInvalidError"}))
+    assert module.reconcile(tmp_path / "rich_publication.sqlite", receipt, "op")["state"] == "rejected"
+    assert module.reconcile(tmp_path / "rich_publication.sqlite", receipt, "op")["telegram_invoked"] is False
+
+
+@pytest.mark.asyncio
 async def test_guards_precede_identity_and_network(tmp_path):
     calls = []
     api = action_api(tmp_path, calls, allow=False)

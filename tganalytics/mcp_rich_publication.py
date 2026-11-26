@@ -8,6 +8,8 @@ import os
 import re
 import sqlite3
 
+from telethon.errors import SendAsPeerInvalidError
+
 from telethon import utils
 from tganalytics.domain.groups import _safe_api_call
 from tganalytics.infra.limiter import safe_call
@@ -99,10 +101,13 @@ async def send_rich(api, *, group, rich_message, operation_id, expected_actor_id
         if existing:
             if existing["hash"] != action_hash:
                 return api["_blocked"]("operation id already bound to another exact payload")
-            return {"success": existing["state"] == "verified", "state": existing["state"],
-                    "message_id": existing["message"], "action_hash": action_hash,
-                    "submitted": True, "reconciliation_required": existing["state"] != "verified",
-                    "new_dispatch": False}
+            if existing["state"] != "rejected":
+                return {"success": existing["state"] == "verified", "state": existing["state"],
+                        "message_id": existing["message"], "action_hash": action_hash,
+                        "submitted": True, "reconciliation_required": existing["state"] != "verified",
+                        "new_dispatch": False}
+            # Only a proven provider rejection may be attempted again, with a
+            # new preview and one-time approval. Unknown reservations stay fenced.
         ok, error, meta = api["_approval_gate"](
             action_hash=action_hash, dry_run=dry_run, approval_code=approval_code)
         if not ok:
@@ -119,16 +124,27 @@ async def send_rich(api, *, group, rich_message, operation_id, expected_actor_id
         from telethon.tl.types import InputReplyToMessage
         random_id = int(action_hash[:15], 16) or 1
         request = SendMessageRequest(peer=await manager.client.get_input_entity(entity),
-            message="", rich_message=rich, random_id=random_id, send_as=sender,
+            message="", rich_message=rich, random_id=random_id,
+            # Saved Messages has no alternate displayed identity; Telegram
+            # rejects an explicit send_as there. Keep actor/sender in the exact
+            # approval and independent readback, omit only this redundant flag.
+            send_as=None if target == me.id == expected_sender_id else sender,
             reply_to=InputReplyToMessage(reply_to_msg_id=reply_to_msg_id) if reply_to_msg_id else None)
         head = await _safe_api_call(manager.client.get_messages, entity, limit=1)
         before_id = head[0].id if head else 0
         # Reserve before dispatch, under the same durable uniqueness constraint.
         try:
             with db:
-                db.execute("INSERT INTO operations(id,hash,payload,state,message,before_id) "
-                           "VALUES (?,?,?,'reserved',NULL,?)",
-                           (operation_id, action_hash, json.dumps(payload, ensure_ascii=False), before_id))
+                if existing and existing["state"] == "rejected":
+                    changed = db.execute("UPDATE operations SET state='reserved',before_id=? "
+                                         "WHERE id=? AND hash=? AND state='rejected' AND message IS NULL",
+                                         (before_id, operation_id, action_hash)).rowcount
+                    if changed != 1:
+                        raise sqlite3.IntegrityError("rejection already claimed")
+                else:
+                    db.execute("INSERT INTO operations(id,hash,payload,state,message,before_id) "
+                               "VALUES (?,?,?,'reserved',NULL,?)",
+                               (operation_id, action_hash, json.dumps(payload, ensure_ascii=False), before_id))
         except sqlite3.IntegrityError:
             return {"success": False, "error_code": "concurrent_operation_reserved",
                     "reconciliation_required": True, "new_dispatch": False}
@@ -136,6 +152,20 @@ async def send_rich(api, *, group, rich_message, operation_id, expected_actor_id
         try:
             result = await safe_call(manager.client, request, max_retries=0,
                 operation_type="dm" if target > 0 else "group_msg", operation_target_id=abs(target))
+        except SendAsPeerInvalidError as error:
+            # This exact RPC error rejects the sender before message creation.
+            # Do not generalize timeouts/unknown RPC errors into a safe retry.
+            with db:
+                db.execute("CREATE TABLE IF NOT EXISTS rejection_receipts "
+                           "(operation_id TEXT, action_hash TEXT, error_type TEXT, evidence TEXT)")
+                db.execute("INSERT INTO rejection_receipts VALUES (?,?,?,?)",
+                           (operation_id, action_hash, type(error).__name__, "native_rpc_rejection"))
+                db.execute("UPDATE operations SET state='rejected' WHERE id=?", (operation_id,))
+            return {"success": False, "submitted": True, "state": "rejected",
+                    "action_hash": action_hash, "error_type": type(error).__name__,
+                    "effect_verified": False, "effect_status": "not_performed",
+                    "reconciliation_required": False, "fresh_preview_required": True,
+                    "automatic_retry_allowed": False}
         except Exception as error:
             return {"success": False, "submitted": True, "state": "unknown",
                     "action_hash": action_hash, "error_type": type(error).__name__,
