@@ -4227,6 +4227,7 @@ async def tg_run_add_member_batch(batch_id: str, max_actions: int = 100) -> dict
 @mcp.tool()
 async def tg_get_actions_policy() -> dict[str, Any]:
     """Return active action policy gates and limits."""
+    from mcp_rich_publication import unaccepted_reply_targets
     limiter_stats = get_rate_limiter().get_stats()
     session_path_status = ctx.session_path_status()
     now = int(time.time())
@@ -4244,6 +4245,10 @@ async def tg_get_actions_policy() -> dict[str, Any]:
 
     lane_status_counts = update_json_dict(LANE_FILE, _lane_counts, root_key="lanes")
     return {
+        "rich_reply_consumer_guard": {
+            "unaccepted_targets": unaccepted_reply_targets(),
+            "compatible_native_tool":"tg_send_message", "wire_format":"ordinary_plain_text",
+            "automatic_fallback":False},
         "server_profile": "actions",
         "actions_enabled": ACTIONS_ENABLED,
         "require_allowlist": REQUIRE_ALLOWLIST,

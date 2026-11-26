@@ -51,6 +51,16 @@ def acknowledgement(result, target, random_id):
             "short_sent":transport(result) if type(result).__name__ == "UpdateShortSentMessage" else None}
 
 
+def unaccepted_reply_targets():
+    raw = os.environ.get('TG_RICH_REPLY_UNACCEPTED_TARGETS','')
+    if not raw:
+        return []
+    parts = raw.split(',')
+    if any(not re.fullmatch('-[1-9][0-9]{0,18}', part) for part in parts):
+        raise ValueError('invalid_rich_reply_consumer_profile')
+    return sorted(set(map(int,parts)))
+
+
 def normalized(value):
     if isinstance(value, dict):
         return {key: normalized(item) for key, item in value.items()
@@ -90,6 +100,11 @@ async def send_rich(api, *, group, rich_message, operation_id, expected_actor_id
     target = utils.get_peer_id(entity)
     if str(target) != group:
         return api["_blocked"]("exact numeric target required")
+    if reply_to_msg_id and target in unaccepted_reply_targets():
+        return {'success':False,'submitted':False,'error_code':'rich_reply_consumer_not_accepted',
+                'consumer_acceptance':'known_rendering_failure','native_rpc_not_invoked':True,
+                'compatible_native_tool':'tg_send_message','compatible_facade_tool':'tg_send_plain_message',
+                'wire_format_required':'ordinary_plain_text','automatic_fallback':False}
     if bool(discussion_channel) != bool(channel_post_id):
         return api["_blocked"]("discussion channel and post must be supplied together")
     root = None

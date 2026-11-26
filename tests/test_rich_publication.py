@@ -389,3 +389,21 @@ async def test_exact_channel_difference_filters_content_and_retains_deletion_upd
     assert [item['id'] for item in update['messages']]==[99]
     assert update['deletion_updates'][0]['messages']==[99]
     assert 'unrelated' not in json.dumps(value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('dry_run',[True,False])
+async def test_operator_known_rich_reply_failure_blocks_before_approval_or_rpc(tmp_path,monkeypatch,dry_run):
+    monkeypatch.delenv('TG_RICH_PREVIEW_ONLY',raising=False)
+    monkeypatch.setenv('TG_RICH_REPLY_UNACCEPTED_TARGETS','-1000000000020')
+    calls=[];api=action_api(tmp_path,calls)
+    manager=await api['ctx'].get_manager()
+    manager._resolve_read_entity.return_value=types.PeerChannel(20)
+    def never(**kwargs):raise AssertionError('must not mint approval')
+    api['_approval_gate']=never
+    args=arguments();args.update(group='-1000000000020',reply_to_msg_id=98)
+    out=await publication.send_rich(api,**args,dry_run=dry_run,confirm=not dry_run)
+    assert out['error_code']=='rich_reply_consumer_not_accepted'
+    assert not out['submitted'] and not out['automatic_fallback']
+    assert out['wire_format_required']=='ordinary_plain_text'
+    assert calls==[] and not (tmp_path/'rich_publication.sqlite').exists()
