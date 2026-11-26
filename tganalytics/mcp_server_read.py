@@ -434,5 +434,18 @@ from mcp_channel_publishing import register_read
 register_read(mcp, ctx)
 
 
+@mcp.tool()
+async def tg_get_message_admin_events(group: str, message_ids: list[int], limit: int = 100,
+                                       max_event_id: int = 0) -> dict:
+    """Read bounded admin delete/edit evidence for exact message ids only.
+
+    Requires actual account admin-log rights. Never deletes/edits or marks read.
+    Follow next_max_event_id for more coverage; an empty result does not prove
+    no deletion. Raw event/message evidence is returned only for requested ids.
+    """
+    from tganalytics.infra.rich_messages import message_admin_events
+    return await message_admin_events(await ctx.get_manager(), group, message_ids, limit, max_event_id)
+
+
 if __name__ == "__main__":
     mcp.run(transport="stdio")

@@ -329,3 +329,24 @@ async def test_linked_reply_read_uses_source_channel_post_and_verifies_discussio
     value = await full_message(manager,'-1000000000020',99,98,'-1000000000011',7)
     assert value['error_code'] == 'linked_discussion_identity_mismatch'
     assert manager.client.__call__.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_admin_audit_returns_only_requested_message_evidence_and_no_other_user_fields():
+    from tganalytics.infra.rich_messages import message_admin_events
+    def event(event_id, message_id, actor):
+        return types.ChannelAdminLogEvent(event_id,datetime.now(timezone.utc),actor,
+            types.ChannelAdminLogEventActionDeleteMessage(types.Message(id=message_id,
+                peer_id=types.PeerChannel(20),date=datetime.now(timezone.utc),message='synthetic')))
+    class Client:
+        get_input_entity=AsyncMock(return_value=types.InputPeerChannel(20,0))
+        __call__=AsyncMock(return_value=SimpleNamespace(events=[event(100,99,8),event(98,98,9)],
+            users=[types.User(id=8,first_name='moderator',phone='not-exported'),types.User(id=9,first_name='other')]))
+    manager=SimpleNamespace(client=Client(),_resolve_read_entity=AsyncMock(return_value=types.PeerChannel(20)))
+    result=await message_admin_events(manager,'-1000000000020',[99],limit=2)
+    assert [e['action']['message']['id'] for e in result['events']]==[99]
+    assert result['actors']==[{'id':8,'username':None,'first_name':'moderator','bot':False}]
+    assert result['next_max_event_id']==98
+    request=manager.client.__call__.call_args.args[0]
+    assert request.events_filter.delete and request.events_filter.edit
+    assert result['no_match_is_not_proof_of_no_deletion'] is True

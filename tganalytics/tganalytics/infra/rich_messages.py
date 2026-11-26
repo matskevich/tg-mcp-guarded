@@ -266,3 +266,48 @@ async def discussion_root(manager, channel, post_id):
     return {"success": True, "channel_id": source_id, "channel_post_id": post_id,
             "discussion_id": utils.get_peer_id(root.peer_id), "discussion_root_id": root.id,
             "raw_root": transport(root)}
+
+
+async def message_admin_events(manager, group, message_ids, limit=100, max_event_id=0):
+    """Bounded read-only audit, returning content only for exact requested ids."""
+    from telethon.tl.functions.channels import GetAdminLogRequest
+    from telethon.tl.types import ChannelAdminLogEventsFilter
+    from telethon.errors import RPCError
+    from ..domain.groups import _safe_api_call
+    if (not isinstance(message_ids, list) or not 1 <= len(message_ids) <= 20
+            or any(type(value) is not int or value <= 0 for value in message_ids)
+            or type(limit) is not int or not 1 <= limit <= 100
+            or type(max_event_id) is not int or max_event_id < 0):
+        raise ValueError("bounded exact message ids and event window required")
+    entity = await manager._resolve_read_entity(group, allow_users=False)
+    if entity is None:
+        return {"success":False, "error_code":"target_not_resolved"}
+    from telethon import utils
+    target = utils.get_peer_id(entity)
+    if str(target) != group:
+        return {"success":False, "error_code":"exact_numeric_target_required"}
+    try:
+        result = await _safe_api_call(manager.client, GetAdminLogRequest(
+            channel=await manager.client.get_input_entity(entity), q="", max_id=max_event_id,
+            min_id=0, limit=limit, events_filter=ChannelAdminLogEventsFilter(delete=True,edit=True)))
+    except RPCError as error:
+        return {"success":False, "error_code":"admin_log_unavailable",
+                "provider_error_type":type(error).__name__, "role_unknown":True}
+    matches = []
+    wanted = set(message_ids)
+    for event in result.events:
+        action = event.action
+        ids = {getattr(getattr(action, key, None), "id", None)
+               for key in ("message", "prev_message", "new_message")}
+        if wanted & ids:
+            matches.append(transport(event))
+    actors = {event["user_id"] for event in matches}
+    return {"success":True, "group_id":target, "message_ids":message_ids,
+            "filter":"delete_and_edit", "events":matches,
+            "actors":[{"id":user.id,"username":getattr(user,"username",None),
+                       "first_name":getattr(user,"first_name",None),"bot":bool(getattr(user,"bot",False))}
+                      for user in result.users if user.id in actors],
+            "scanned_events":len(result.events),
+            "oldest_scanned_date":transport(result.events[-1].date) if result.events else None,
+            "next_max_event_id":min(event.id for event in result.events) if len(result.events)==limit else None,
+            "no_match_is_not_proof_of_no_deletion":True}
