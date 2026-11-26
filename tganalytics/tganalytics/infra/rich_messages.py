@@ -302,8 +302,23 @@ async def message_admin_events(manager, group, message_ids, limit=100, max_event
         if wanted & ids:
             matches.append(transport(event))
     actors = {event["user_id"] for event in matches}
+    moderation = {"creator":getattr(entity,"creator",None),
+                  "megagroup":getattr(entity,"megagroup",None),
+                  "broadcast":getattr(entity,"broadcast",None),
+                  "left":getattr(entity,"left",None),
+                  "default_banned_rights":transport(getattr(entity,"default_banned_rights",None))}
+    from telethon.tl.functions.channels import GetFullChannelRequest
+    try:
+        full = await _safe_api_call(manager.client, GetFullChannelRequest(
+            channel=await manager.client.get_input_entity(entity)))
+        info = getattr(full, "full_chat", None)
+        moderation.update({key:transport(getattr(info,key,None)) for key in
+                           ("antispam","ttl_period","slowmode_seconds","default_send_as")})
+        moderation["full_info_available"] = info is not None
+    except RPCError as error:
+        moderation.update(full_info_available=False, provider_error_type=type(error).__name__)
     return {"success":True, "group_id":target, "message_ids":message_ids,
-            "filter":"delete_and_edit", "events":matches,
+            "filter":"delete_and_edit", "events":matches, "moderation":moderation,
             "actors":[{"id":user.id,"username":getattr(user,"username",None),
                        "first_name":getattr(user,"first_name",None),"bot":bool(getattr(user,"bot",False))}
                       for user in result.users if user.id in actors],

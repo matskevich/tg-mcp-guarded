@@ -347,6 +347,6 @@ async def test_admin_audit_returns_only_requested_message_evidence_and_no_other_
     assert [e['action']['message']['id'] for e in result['events']]==[99]
     assert result['actors']==[{'id':8,'username':None,'first_name':'moderator','bot':False}]
     assert result['next_max_event_id']==98
-    request=manager.client.__call__.call_args.args[0]
+    request=manager.client.__call__.call_args_list[0].args[0]
     assert request.events_filter.delete and request.events_filter.edit
     assert result['no_match_is_not_proof_of_no_deletion'] is True
