@@ -100,3 +100,23 @@ async def test_plain_reconcile_is_nonce_bound_exact_and_never_releases_unknown(m
         out=await inspect_or_reconcile(api,str(peer),action_hash,item['nonce'],99)
         assert out['effect_status']=='unknown' and not out['automatic_retry_allowed']
     assert operation(path,action_hash)==before
+
+
+@pytest.mark.asyncio
+async def test_plain_matching_text_without_operation_receipt_is_not_causal_proof(monkeypatch,tmp_path):
+    from mcp_plain_guard import inspect_or_reconcile
+    peer=-1000000000020;path=tmp_path/'idem.json'
+    payload={'action':'send_message','target':str(peer),'text':'same',
+             'identity':{'actor_id':10,'sender_id':10,'send_as_id':10,'peer_id':peer}}
+    h=actions._hash_payload(payload);op=reserve(path,h,payload,window=0)
+    finish(path,h,op['nonce'],'unknown',{'submitted':True})
+    message=types.Message(id=99,peer_id=types.PeerChannel(20),from_id=types.PeerUser(10),
+                          message='same',date=datetime.now(timezone.utc))
+    manager=SimpleNamespace(client=SimpleNamespace(get_me=AsyncMock(return_value=SimpleNamespace(id=10)),
+        get_messages=AsyncMock(return_value=message)),_resolve_target_entity=AsyncMock(return_value=types.PeerChannel(20)))
+    api={'ctx':SimpleNamespace(get_manager=AsyncMock(return_value=manager)),
+         'IDEMPOTENCY_FILE':path,'_normalize_target':actions._normalize_target,'_hash_payload':actions._hash_payload}
+    out=await inspect_or_reconcile(api,str(peer),h,op['nonce'],99)
+    assert out['content_match'] and out['effect_status']=='unknown'
+    assert out['constraint']=='plain_operation_causality_unproven'
+    assert not reserve(path,h,payload,force=True,window=0)['allowed']

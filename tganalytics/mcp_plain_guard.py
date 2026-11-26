@@ -102,7 +102,12 @@ async def inspect_or_reconcile(api, group, action_hash, operation_id=None, messa
                getattr(message,'message',None) == payload['text'] and
                getattr(message,'rich_message',None) is None and
                type(getattr(message,'media',None)).__name__ != 'MessageMediaUnsupported')
-    return {**result,'success':bool(matches),'effect_status':'verified' if matches else 'unknown',
+    receipt = result['provider_receipt'] or {}
+    causal_match = type(receipt.get('message_id')) is int and receipt['message_id'] == message_id
+    verified = bool(matches and causal_match)
+    return {**result,'success':verified,'effect_status':'verified' if verified else 'unknown',
+            'content_match':bool(matches),'operation_receipt_id_match':causal_match,
+            'constraint':None if causal_match else 'plain_operation_causality_unproven',
             'message_id':message_id,'read_method':'get_messages_exact_id',
             'message_type':type(message).__name__,
             'no_match_is_not_proof_of_no_effect':True,
