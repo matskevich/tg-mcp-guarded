@@ -4377,6 +4377,39 @@ async def tg_reconcile_rich_message(group: str, operation_id: str, message_id: i
     return await reconcile_rich(globals(), group, operation_id, message_id)
 
 
+@mcp.tool()
+async def tg_edit_rich_message(
+    group: str, message_id: int, rich_message: dict, operation_id: str,
+    expected_actor_id: int, expected_sender_id: int, expected_rich_sha256: str,
+    dry_run: bool = True, confirm: bool = False,
+    confirmation_text: str = "", approval_code: str = "",
+) -> dict:
+    """Edit a complete native rich body in place under existing ActionMCP guards.
+
+    Exact before hash is checked twice (optimistic CAS, not atomic server CAS).
+    Preview binds the whole body, actor, sender, message and original metadata.
+    Unknown dispatch stays fenced across restarts; reconcile the SAME operation.
+    Never splits, deletes/reposts, changes replies or falls back to plain edit.
+    """
+    from mcp_rich_edit import edit_rich
+    try:
+        return await edit_rich(globals(), group=group, message_id=message_id,
+            rich_message=rich_message, operation_id=operation_id,
+            expected_actor_id=expected_actor_id, expected_sender_id=expected_sender_id,
+            expected_rich_sha256=expected_rich_sha256, dry_run=dry_run, confirm=confirm,
+            confirmation_text=confirmation_text, approval_code=approval_code)
+    except Exception as error:
+        return {"success": False, "error_code": "rich_edit_failed",
+                "error_type": type(error).__name__, "reconciliation_required": not dry_run}
+
+
+@mcp.tool()
+async def tg_reconcile_rich_edit(group: str, operation_id: str, message_id: int) -> dict:
+    """Independent exact edited body/metadata readback; never retries an edit."""
+    from mcp_rich_edit import reconcile_rich_edit
+    return await reconcile_rich_edit(globals(), group, operation_id, message_id)
+
+
 from mcp_private_channel import register_actions as register_private_channel
 register_private_channel(globals())
 from mcp_channel_publishing import register_actions

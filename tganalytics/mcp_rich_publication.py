@@ -232,6 +232,8 @@ async def reconcile_rich(api, group, operation_id, message_id):
         if not row:
             return {"success": False, "error_code": "unknown_operation"}
         payload = json.loads(row["payload"])
+        if payload.get("action") != "send_rich_message":
+            return api["_blocked"]("operation kind mismatch")
         if str(payload["target"]) != group:
             return api["_blocked"]("operation target mismatch")
         if row["message"] is not None and row["message"] != message_id:
