@@ -350,3 +350,42 @@ async def test_admin_audit_returns_only_requested_message_evidence_and_no_other_
     request=manager.client.__call__.call_args_list[0].args[0]
     assert request.events_filter.delete and request.events_filter.edit
     assert result['no_match_is_not_proof_of_no_deletion'] is True
+
+
+def test_native_ack_retains_exact_message_without_other_user_or_chat_payloads():
+    message=types.Message(id=99,peer_id=types.PeerChannel(20),date=datetime.now(timezone.utc),
+        message='synthetic',reply_to=types.MessageReplyHeader(reply_to_msg_id=98))
+    unrelated=types.Message(id=88,peer_id=types.PeerChannel(21),date=datetime.now(timezone.utc),message='do not export')
+    result=SimpleNamespace(updates=[types.UpdateMessageID(id=99,random_id=12),
+        types.UpdateNewChannelMessage(message=message,pts=1,pts_count=1),
+        types.UpdateNewChannelMessage(message=unrelated,pts=2,pts_count=1)],
+        users=[SimpleNamespace(phone='do not retain')])
+    value=publication.acknowledgement(result,-1000000000020,12)
+    assert [v.get('message',{}).get('id') for v in value['updates']]==[None,99]
+    assert 'do not export' not in json.dumps(value)
+    assert 'phone' not in json.dumps(value)
+
+
+@pytest.mark.asyncio
+async def test_exact_channel_difference_filters_content_and_retains_deletion_update():
+    from tganalytics.infra.rich_messages import message_admin_events
+    message=types.Message(id=99,peer_id=types.PeerChannel(20),date=datetime.now(timezone.utc),message='exact')
+    other=types.Message(id=100,peer_id=types.PeerChannel(20),date=datetime.now(timezone.utc),message='unrelated')
+    async def rpc(request):
+        if type(request).__name__=='GetAdminLogRequest':return SimpleNamespace(events=[],users=[])
+        if type(request).__name__=='GetFullChannelRequest':return SimpleNamespace(full_chat=SimpleNamespace(antispam=True))
+        assert type(request).__name__=='GetChannelDifferenceRequest'
+        assert request.pts==34 and request.filter.ranges[0].min_id==request.filter.ranges[0].max_id==99
+        return SimpleNamespace(new_messages=[message,other],other_updates=[types.UpdateDeleteChannelMessages(
+            channel_id=20,messages=[99,100],pts=42,pts_count=1)],pts=42,final=True)
+    manager=SimpleNamespace(client=SimpleNamespace(get_input_entity=AsyncMock(return_value=types.InputPeerChannel(20,0)),
+        __call__=None),_resolve_read_entity=AsyncMock(return_value=types.PeerChannel(20)))
+    class Client:
+        get_input_entity=manager.client.get_input_entity
+        __call__=AsyncMock(side_effect=rpc)
+    manager.client=Client()
+    value=await message_admin_events(manager,'-1000000000020',[99],from_pts=34)
+    update=value['update_evidence']
+    assert [item['id'] for item in update['messages']]==[99]
+    assert update['deletion_updates'][0]['messages']==[99]
+    assert 'unrelated' not in json.dumps(value)

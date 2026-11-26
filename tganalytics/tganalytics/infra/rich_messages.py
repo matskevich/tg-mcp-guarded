@@ -268,7 +268,7 @@ async def discussion_root(manager, channel, post_id):
             "raw_root": transport(root)}
 
 
-async def message_admin_events(manager, group, message_ids, limit=100, max_event_id=0):
+async def message_admin_events(manager, group, message_ids, limit=100, max_event_id=0, from_pts=0):
     """Bounded read-only audit, returning content only for exact requested ids."""
     from telethon.tl.functions.channels import GetAdminLogRequest
     from telethon.tl.types import ChannelAdminLogEventsFilter
@@ -277,7 +277,9 @@ async def message_admin_events(manager, group, message_ids, limit=100, max_event
     if (not isinstance(message_ids, list) or not 1 <= len(message_ids) <= 20
             or any(type(value) is not int or value <= 0 for value in message_ids)
             or type(limit) is not int or not 1 <= limit <= 100
-            or type(max_event_id) is not int or max_event_id < 0):
+            or type(max_event_id) is not int or max_event_id < 0
+            or type(from_pts) is not int or from_pts < 0
+            or max(message_ids)-min(message_ids) > 1000):
         raise ValueError("bounded exact message ids and event window required")
     entity = await manager._resolve_read_entity(group, allow_users=False)
     if entity is None:
@@ -317,7 +319,34 @@ async def message_admin_events(manager, group, message_ids, limit=100, max_event
         moderation["full_info_available"] = info is not None
     except RPCError as error:
         moderation.update(full_info_available=False, provider_error_type=type(error).__name__)
+    update_evidence = None
+    if from_pts:
+        from telethon.tl.functions.updates import GetChannelDifferenceRequest
+        from telethon.tl.types import ChannelMessagesFilter, MessageRange
+        try:
+            difference = await _safe_api_call(manager.client, GetChannelDifferenceRequest(
+                channel=await manager.client.get_input_entity(entity), pts=from_pts, limit=limit,
+                filter=ChannelMessagesFilter(ranges=[MessageRange(min(message_ids),max(message_ids))]),
+                force=True))
+            messages = [transport(item) for item in
+                        getattr(difference,"new_messages",getattr(difference,"messages",[]))
+                        if item.id in wanted and getattr(item,"peer_id",None) is not None
+                        and utils.get_peer_id(item.peer_id)==target]
+            updates = []
+            for item in getattr(difference,"other_updates",[]):
+                ids = getattr(item,"messages",[])
+                if type(item).__name__ == "UpdateDeleteChannelMessages" and wanted.intersection(ids):
+                    raw = transport(item)
+                    raw["messages"] = [value for value in ids if value in wanted]
+                    updates.append(raw)
+            update_evidence = {"response_type":type(difference).__name__,"from_pts":from_pts,
+                "pts":getattr(difference,"pts",None),"final":getattr(difference,"final",None),
+                "messages":messages,"deletion_updates":updates,
+                "other_update_types":[type(item).__name__ for item in getattr(difference,"other_updates",[])]}
+        except RPCError as error:
+            update_evidence = {"error_type":type(error).__name__,"from_pts":from_pts}
     return {"success":True, "group_id":target, "message_ids":message_ids,
+            "update_evidence":update_evidence,
             "filter":"delete_and_edit", "events":matches, "moderation":moderation,
             "actors":[{"id":user.id,"username":getattr(user,"username",None),
                        "first_name":getattr(user,"first_name",None),"bot":bool(getattr(user,"bot",False))}

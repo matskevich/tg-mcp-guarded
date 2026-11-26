@@ -14,7 +14,7 @@ from telethon import utils
 from tganalytics.domain.groups import _safe_api_call
 from tganalytics.infra.limiter import safe_call
 from tganalytics.infra.rich_messages import (
-    UnsupportedRichContent, canonical_rich_tree, digest, discussion_root, full_message, prepare_rich,
+    UnsupportedRichContent, canonical_rich_tree, digest, discussion_root, full_message, prepare_rich, transport,
 )
 
 
@@ -30,7 +30,25 @@ def ledger(api):
     if "before_id" not in {row[1] for row in db.execute("PRAGMA table_info(operations)")}:
         db.execute("ALTER TABLE operations ADD COLUMN before_id INTEGER")
         db.commit()
+    if "receipt" not in {row[1] for row in db.execute("PRAGMA table_info(operations)")}:
+        db.execute("ALTER TABLE operations ADD COLUMN receipt TEXT")
+        db.commit()
     return db
+
+
+def acknowledgement(result, target, random_id):
+    """Retain exact effect evidence, not unrelated returned users/contacts."""
+    updates = []
+    for item in getattr(result, "updates", []):
+        name = type(item).__name__
+        if name == "UpdateMessageID" and item.random_id == random_id:
+            updates.append(transport(item))
+        elif name in {"UpdateNewMessage", "UpdateNewChannelMessage"}:
+            if utils.get_peer_id(item.message.peer_id) == target:
+                updates.append(transport(item))
+    return {"response_type":type(result).__name__, "updates":updates,
+            "update_types":[type(item).__name__ for item in getattr(result,"updates",[])],
+            "short_sent":transport(result) if type(result).__name__ == "UpdateShortSentMessage" else None}
 
 
 def normalized(value):
@@ -180,7 +198,8 @@ async def send_rich(api, *, group, rich_message, operation_id, expected_actor_id
         if type(result).__name__ == "UpdateShortSentMessage":
             message_id = result.id
         with db:
-            db.execute("UPDATE operations SET state='sent',message=? WHERE id=?", (message_id, operation_id))
+            db.execute("UPDATE operations SET state='sent',message=?,receipt=? WHERE id=?",
+                       (message_id, json.dumps(acknowledgement(result,target,random_id),ensure_ascii=False), operation_id))
         return {"success": True, "submitted": True, "message_id": message_id,
                 "target": target, "state": "sent", "action_hash": action_hash,
                 "effect_verified": False, "reconciliation_required": True}
@@ -231,7 +250,8 @@ async def reconcile_rich(api, group, operation_id, message_id):
                     "automatic_retry_allowed": False,
                     "read_error_code": result.get("error_code"),
                     "read_evidence": result.get("read_evidence"),
-                    "retrieval": result.get("retrieval")}
+                    "retrieval": result.get("retrieval"),
+                    "provider_receipt_available": bool(row["receipt"])}
         with db:
             db.execute("UPDATE operations SET state='verified',message=? WHERE id=?", (message_id, operation_id))
         return {"success": True, "state": "verified", "message_id": message_id,

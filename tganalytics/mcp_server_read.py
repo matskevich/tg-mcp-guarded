@@ -436,7 +436,7 @@ register_read(mcp, ctx)
 
 @mcp.tool()
 async def tg_get_message_admin_events(group: str, message_ids: list[int], limit: int = 100,
-                                       max_event_id: int = 0) -> dict:
+                                       max_event_id: int = 0, from_pts: int = 0) -> dict:
     """Read bounded admin delete/edit evidence for exact message ids only.
 
     Requires actual account admin-log rights. Never deletes/edits or marks read.
@@ -444,7 +444,7 @@ async def tg_get_message_admin_events(group: str, message_ids: list[int], limit:
     no deletion. Raw event/message evidence is returned only for requested ids.
     """
     from tganalytics.infra.rich_messages import message_admin_events
-    return await message_admin_events(await ctx.get_manager(), group, message_ids, limit, max_event_id)
+    return await message_admin_events(await ctx.get_manager(), group, message_ids, limit, max_event_id, from_pts)
 
 
 if __name__ == "__main__":
