@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import os
 import secrets
@@ -26,7 +27,7 @@ os.environ.setdefault("TG_DIRECT_TELETHON_WRITE_ALLOWED_CONTEXTS", "actions_mcp"
 os.environ.setdefault("TG_WRITE_CONTEXT", "actions_mcp")
 os.environ.setdefault("TG_ACTION_PROCESS", "1")
 
-from mcp.server.fastmcp import FastMCP  # noqa: E402
+from mcp_strict import StrictFastMCP as FastMCP  # noqa: E402
 from mcp_actions_batch import (  # noqa: E402
     create_add_member_batch_record,
     create_delete_messages_batch_record,
@@ -1934,6 +1935,13 @@ async def tg_run_bot_steps(
     }
 
 
+async def _verified_reply_preview(group, reply_to_msg_id):
+    if reply_to_msg_id is None:
+        return None
+    manager = await ctx.get_manager()
+    return await manager.verify_reply_target(group, reply_to_msg_id)
+
+
 @mcp.tool()
 async def tg_send_message(
     group: str,
@@ -1943,6 +1951,10 @@ async def tg_send_message(
     confirmation_text: str = "",
     approval_code: str = "",
     force_resend: bool = False,
+    reply_to_msg_id: int | None = None,
+    send_as_id: int | None = None,
+    expected_actor_id: int | None = None,
+    expected_sender_id: int | None = None,
 ) -> dict:
     """Send message with policy gates (confirm + confirmation_text + idempotency)."""
     can_run, error = _check_action_preconditions(
@@ -1954,8 +1966,19 @@ async def tg_send_message(
     if not can_run:
         return _blocked(error or "preconditions failed")
 
-    clean_text = (message_text or "").strip()
-    if not clean_text:
+    if not dry_run and os.getenv("TG_RICH_PREVIEW_ONLY", "0") == "1":
+        return {"success":False,"submitted":False,"error_code":"ordinary_actor_preview_only"}
+
+    if reply_to_msg_id is not None and (type(reply_to_msg_id) is not int or not 0 < reply_to_msg_id < 2**31):
+        return _blocked("reply_to_msg_id must be a positive message id")
+
+    try:
+        reply_target = await _verified_reply_preview(group, reply_to_msg_id)
+    except ValueError as error:
+        return _blocked(str(error))
+
+    clean_text = message_text or ""
+    if not clean_text.strip():
         return _blocked("message_text is empty")
 
     if len(clean_text) > MAX_MESSAGE_LEN:
@@ -1964,13 +1987,25 @@ async def tg_send_message(
             "error": f"message_text is too long ({len(clean_text)} > {MAX_MESSAGE_LEN})",
         }
 
-    action_hash = _hash_payload(
-        {
+    identity = None
+    if any(value is not None for value in (send_as_id,expected_actor_id,expected_sender_id)):
+        try:
+            manager = await ctx.get_manager()
+            identity, _ = await manager.prepare_send_identity(group,send_as_id,expected_actor_id,expected_sender_id)
+        except ValueError as error:
+            return _blocked(str(error))
+
+    payload = {
             "action": "send_message",
             "target": _normalize_target(group),
             "text": clean_text,
         }
-    )
+    if reply_to_msg_id is not None:
+        payload["reply_to_msg_id"] = reply_to_msg_id
+        payload["reply_target"] = reply_target
+    if identity is not None:
+        payload["identity"] = identity
+    action_hash = _hash_payload(payload)
 
     approval_ok, approval_error, approval_meta = _approval_gate(
         action_hash=action_hash,
@@ -1987,6 +2022,14 @@ async def tg_send_message(
             "target": group,
             "message_len": len(clean_text),
             "action_hash": action_hash,
+            "reply_to_msg_id": reply_to_msg_id,
+            "reply_target": reply_target,
+            "identity": identity,
+            "actor_id": identity["actor_id"] if identity else None,
+            "send_as_id": identity["sender_id"] if identity else None,
+            "message_text": clean_text,
+            "text_sha256":hashlib.sha256(clean_text.encode()).hexdigest(),
+            "wire_format":"ordinary_plain_text",
             "confirmation_text_required": (
                 CONFIRMATION_PHRASE if REQUIRE_CONFIRMATION_TEXT else None
             ),
@@ -2007,16 +2050,47 @@ async def tg_send_message(
                 "Set force_resend=true to override.",
             }
 
+    from mcp_plain_guard import reserve, finish
+    reservation = reserve(IDEMPOTENCY_FILE, action_hash, payload, force_resend,
+                          IDEMPOTENCY_WINDOW_SEC if IDEMPOTENCY_ENABLED else 0)
+    if not reservation["allowed"]:
+        return {"success":False, "action_hash":action_hash, **reservation,
+                "reconciliation_required":True}
+    nonce = reservation["nonce"]
     manager = await ctx.get_manager()
     try:
-        sent = await manager.send_message(group, clean_text)
+        options = {} if reply_to_msg_id is None else {"reply_to_msg_id": reply_to_msg_id}
+        if identity is not None:
+            options.update(send_as_id=send_as_id, expected_actor_id=expected_actor_id,
+                           expected_sender_id=expected_sender_id)
+        sent = await manager.send_message(group, clean_text, return_receipt=True, **options)
     except LocalQuotaExceeded as exc:
+        finish(IDEMPOTENCY_FILE,action_hash,nonce,"rejected",{"submitted":False,"error_type":"LocalQuotaExceeded"})
         return {"success": False, "target": group, "action_hash": action_hash,
                 "error_code": "local_quota_exceeded", "error": str(exc),
                 "sent": False}
-    if sent:
+    if isinstance(sent, dict) and sent.get("submitted") is False:
+        finish(IDEMPOTENCY_FILE,action_hash,nonce,"rejected",sent)
+        return {"success":False,"action_hash":action_hash,**sent,"error_code":"send_precondition_changed"}
+    if not isinstance(sent, dict) or not sent.get("message_id"):
+        receipt=sent if isinstance(sent,dict) else {"submitted":True,"state":"unknown"}
+        finish(IDEMPOTENCY_FILE,action_hash,nonce,"unknown",receipt)
         _mark_action_executed(action_hash)
+        return {"success":False,**receipt,"state":"unknown","action_hash":action_hash,
+                "error_code":"native_send_receipt_missing","automatic_retry_allowed":False}
+    if reply_to_msg_id is not None and sent.get("reply_to_msg_id") != reply_to_msg_id:
+        finish(IDEMPOTENCY_FILE,action_hash,nonce,"unknown",sent)
+        _mark_action_executed(action_hash)
+        return {"success":False,**sent,"state":"unknown","action_hash":action_hash,
+                "error_code":"reply_binding_not_observed","automatic_retry_allowed":False}
+    finish(IDEMPOTENCY_FILE,action_hash,nonce,"sent",sent)
+    _mark_action_executed(action_hash)
+    if sent:
         return {
+            **sent,
+            "reply_target":reply_target,
+            "identity":identity,
+            "wire_format":"ordinary_plain_text",
             "success": True,
             "target": group,
             "message_len": len(clean_text),

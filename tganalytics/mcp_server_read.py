@@ -17,7 +17,7 @@ os.environ.setdefault("TG_WRITE_CONTEXT", "read_mcp")
 os.environ.setdefault("TG_ACTION_PROCESS", "0")
 os.environ.setdefault("TG_SESSION_RUNTIME_MODE", "copy")
 
-from mcp.server.fastmcp import FastMCP  # noqa: E402
+from mcp_strict import StrictFastMCP as FastMCP  # noqa: E402
 from mcp_server_common import MCPServerContext  # noqa: E402
 
 from tganalytics.infra.limiter import get_rate_limiter, safe_call  # noqa: E402

@@ -37,8 +37,8 @@ for raw in sys.stdin:
             "id": req_id,
             "result": {
                 "tools": [
-                    {"name": "tg_echo_env"},
-                    {"name": "tg_send_message"},
+                    {"name": "tg_echo_env", "inputSchema":{"type":"object","properties":{}}},
+                    {"name": "tg_send_message", "inputSchema":{"type":"object","properties":{key:{} for key in ["group","message_text","dry_run","confirm","confirmation_text","approval_code","force_resend"]}}},
                 ]
             },
         }
