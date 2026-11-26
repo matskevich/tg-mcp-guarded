@@ -2130,6 +2130,99 @@ async def tg_pin_message(
 
 
 @mcp.tool()
+async def tg_unpin_message(
+    group: str,
+    message_id: int,
+    dry_run: bool = True,
+    confirm: bool = False,
+    confirmation_text: str = "",
+    approval_code: str = "",
+    force_resend: bool = False,
+) -> dict:
+    """Unpin one exact message; preserve history, approvals and idempotency."""
+    can_run, error = _check_action_preconditions(
+        group,
+        dry_run=dry_run,
+        confirm=confirm,
+        confirmation_text=confirmation_text,
+    )
+    if not can_run:
+        return _blocked(error or "preconditions failed")
+
+    try:
+        normalized_message_id = int(message_id)
+    except (TypeError, ValueError):
+        return _blocked("message_id must be a positive integer")
+    if normalized_message_id <= 0:
+        return _blocked("message_id must be a positive integer")
+
+    action_hash = _hash_payload(
+        {
+            "action": "unpin_message",
+            "target": _normalize_target(group),
+            "message_id": normalized_message_id,
+        }
+    )
+
+    approval_ok, approval_error, approval_meta = _approval_gate(
+        action_hash=action_hash,
+        dry_run=dry_run,
+        approval_code=approval_code,
+    )
+    if not approval_ok:
+        return _blocked(approval_error or "approval gate blocked")
+
+    if dry_run:
+        result = {
+            "success": True,
+            "dry_run": True,
+            "target": group,
+            "message_id": normalized_message_id,
+            "action_hash": action_hash,
+            "confirmation_text_required": (
+                CONFIRMATION_PHRASE if REQUIRE_CONFIRMATION_TEXT else None
+            ),
+        }
+        if approval_meta:
+            result.update(approval_meta)
+        return result
+
+    if not force_resend:
+        duplicate, retry_after_sec = _check_recent_duplicate(action_hash)
+        if duplicate:
+            return {
+                "success": False,
+                "duplicate_blocked": True,
+                "retry_after_sec": retry_after_sec,
+                "action_hash": action_hash,
+                "error": "Duplicate action blocked by idempotency window. "
+                "Set force_resend=true to override.",
+            }
+
+    manager = await ctx.get_manager()
+    pinned = await manager.unpin_message(
+        group,
+        normalized_message_id,
+    )
+    if pinned:
+        _mark_action_executed(action_hash)
+        return {
+            "success": True,
+            "target": group,
+            "message_id": normalized_message_id,
+            "action_hash": action_hash,
+        }
+
+    return {
+        "success": False,
+        "target": group,
+        "message_id": normalized_message_id,
+        "action_hash": action_hash,
+        "error": "unpin_message failed (see server logs for details)",
+    }
+
+
+@mcp.tool()
 async def tg_create_write_lane(
     name: str,
     purpose: str,
