@@ -260,3 +260,41 @@ async def test_unknown_dispatch_stays_reserved_across_new_process_ledger_and_no_
     assert again["reconciliation_required"] is True
     assert again["new_dispatch"] is False
     assert len(calls) == 1
+
+
+def test_server_auto_url_normalization_preserves_text_but_not_changed_style_or_explicit_link():
+    from tganalytics.infra.rich_messages import canonical_rich_tree
+    plain = {"_":"TextPlain", "text":"a https://example.test 😀\n"}
+    normalized = {"_":"TextConcat", "texts":[{"_":"TextPlain","text":"a "},
+        {"_":"TextAutoUrl","text":{"_":"TextPlain","text":"https://example.test"}},
+        {"_":"TextPlain","text":" 😀\n"}]}
+    assert canonical_rich_tree(normalized) == plain
+    assert projection({"blocks":[{"_":"PageBlockParagraph","text":normalized}]})["text"] == plain["text"]
+    assert canonical_rich_tree({"_":"TextBold","text":plain}) != plain
+    assert canonical_rich_tree({"_":"TextUrl","text":plain,"url":"https://other.test"}) != plain
+    assert canonical_rich_tree({"_":"TextAutoUrl","text":plain,"future_field":True}) != plain
+
+
+@pytest.mark.asyncio
+async def test_full_read_uses_exact_thread_when_ids_lookup_cannot_find_rich_reply():
+    rich = types.RichMessage(blocks=[types.PageBlockParagraph(types.TextPlain("complete reply"))],
+                             photos=[], documents=[])
+    reply = types.Message(id=99, peer_id=types.PeerChannel(20), date=datetime.now(timezone.utc),
+        message="", rich_message=rich, from_id=types.PeerChannel(11),
+        reply_to=types.MessageReplyHeader(reply_to_msg_id=98))
+    class Client:
+        get_messages = AsyncMock(return_value=None)
+        get_input_entity = AsyncMock(return_value=types.InputPeerChannel(20,0))
+        __call__ = AsyncMock(return_value=SimpleNamespace(messages=[reply]))
+    manager = SimpleNamespace(client=Client(),
+        _resolve_read_entity=AsyncMock(return_value=types.PeerChannel(20)))
+    result = await full_message(manager, "-1000000000020", 99, thread_root_id=98)
+    assert result["content_complete"] is True and result["text"] == "complete reply"
+    assert result["retrieval"]["method"] == "messages.getReplies"
+    request = manager.client.__call__.call_args.args[0]
+    assert request.msg_id == 98 and request.min_id == 98 and request.max_id == 100
+    reply.reply_to.reply_to_msg_id = 97
+    assert (await full_message(manager,"-1000000000020",99,thread_root_id=98))["error_code"] == "message_thread_mismatch"
+    reply.reply_to.reply_to_msg_id = 98
+    reply.peer_id = types.PeerChannel(21)
+    assert (await full_message(manager,"-1000000000020",99,thread_root_id=98))["error_code"] == "message_peer_mismatch"

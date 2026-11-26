@@ -14,7 +14,7 @@ from telethon import utils
 from tganalytics.domain.groups import _safe_api_call
 from tganalytics.infra.limiter import safe_call
 from tganalytics.infra.rich_messages import (
-    UnsupportedRichContent, digest, discussion_root, full_message, prepare_rich,
+    UnsupportedRichContent, canonical_rich_tree, digest, discussion_root, full_message, prepare_rich,
 )
 
 
@@ -208,7 +208,7 @@ async def reconcile_rich(api, group, operation_id, message_id):
         me = await _safe_api_call(manager.client.get_me)
         if me.id != payload["actor"]:
             return api["_blocked"]("operation actor account mismatch")
-        result = await full_message(manager, group, message_id)
+        result = await full_message(manager, group, message_id, thread_root_id=payload["reply_to_msg_id"])
         raw = result.get("raw_message", {})
         rich = raw.get("rich_message") or {}
         sender = raw.get("from_id") or raw.get("peer_id")
@@ -219,7 +219,7 @@ async def reconcile_rich(api, group, operation_id, message_id):
         expected = payload["rich_message"]
         matches = (result.get("content_complete") is True and sender_id == payload["sender"]
                    and reply == payload["reply_to_msg_id"] and
-                   normalized(rich.get("blocks")) == normalized(expected.get("blocks")) and
+                   canonical_rich_tree(normalized(rich.get("blocks"))) == canonical_rich_tree(normalized(expected.get("blocks"))) and
                    bool(rich.get("rtl")) == bool(expected.get("rtl")))
         for name in ("photos", "documents"):
             matches = matches and ([item["id"] for item in rich.get(name, [])] ==
@@ -231,6 +231,9 @@ async def reconcile_rich(api, group, operation_id, message_id):
             db.execute("UPDATE operations SET state='verified',message=? WHERE id=?", (message_id, operation_id))
         return {"success": True, "state": "verified", "message_id": message_id,
                 "target": payload["target"], "action_hash": row["hash"],
-                "rich_sha256": result.get("rich_sha256"), "independent_readback": True}
+                "rich_sha256": result.get("rich_sha256"), "independent_readback": True,
+                "exact_rich_tree_match": normalized(rich.get("blocks")) == normalized(expected.get("blocks")),
+                "normalization_policy": "implicit_auto_url_and_adjacent_plain_concat_only",
+                "retrieval": result.get("retrieval")}
     finally:
         db.close()
