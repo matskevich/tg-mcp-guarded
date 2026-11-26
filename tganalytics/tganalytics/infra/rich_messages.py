@@ -170,9 +170,29 @@ async def full_message(manager, group, message_id, thread_root_id=0,
         retrieval.update(thread_root_id=thread_root_id, source_channel_id=root["channel_id"],
                          source_channel_post_id=channel_post_id)
     if message is None or type(message).__name__ == "MessageEmpty":
+        from telethon.tl.functions.messages import GetRichMessageRequest
+        from telethon.errors import RPCError
+        try:
+            rich_response = await _safe_api_call(manager.client, GetRichMessageRequest(
+                peer=await manager.client.get_input_entity(entity), id=message_id))
+            message = next((item for item in rich_response.messages if item.id == message_id
+                            and getattr(item, "peer_id", None) is not None
+                            and transport(item).get("_") != "MessageEmpty"), None)
+            retrieval["direct_rich_lookup"] = {"response_type": type(rich_response).__name__,
+                "returned_ids": [getattr(item, "id", None) for item in rich_response.messages],
+                "message_shapes": [{"constructor": transport(item).get("_"),
+                                    "keys": list(transport(item)),
+                                    "has_rich_message": getattr(item, "rich_message", None) is not None,
+                                    "has_peer": getattr(item, "peer_id", None) is not None}
+                                   for item in rich_response.messages]}
+            if message is not None:
+                retrieval["method"] = "messages.getRichMessage"
+        except RPCError as error:
+            retrieval["direct_rich_lookup"] = {"error_type": type(error).__name__}
+    if message is None or type(message).__name__ == "MessageEmpty":
         if not thread_root_id:
             return {"success": False, "error_code": "message_not_found",
-                    "thread_route_available": True}
+                    "thread_route_available": True, "read_evidence": retrieval}
         # The caller supplies a source-bound exact root (reconciliation uses
         # the approved reply identity). GetReplies and the returned peer/reply
         # are checked below; a second ids lookup has the same rich lookup gap.
@@ -189,7 +209,8 @@ async def full_message(manager, group, message_id, thread_root_id=0,
                     "thread_root_id": thread_root_id, "read_evidence": {
                         "response_type": type(response).__name__,
                         "returned_ids": [getattr(item, "id", None) for item in response.messages],
-                        "count": getattr(response, "count", None)}}
+                        "count": getattr(response, "count", None),
+                        "direct_rich_lookup": retrieval.get("direct_rich_lookup")}}
         retrieval["method"] = "messages.getReplies"
     if thread_root_id:
         reply = getattr(message, "reply_to", None)

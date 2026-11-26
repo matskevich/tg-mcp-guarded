@@ -228,7 +228,10 @@ async def reconcile_rich(api, group, operation_id, message_id):
                                    [item["id"] for item in expected.get(name, [])])
         if not matches:
             return {"success": False, "state": "unknown", "readback_mismatch": True,
-                    "automatic_retry_allowed": False}
+                    "automatic_retry_allowed": False,
+                    "read_error_code": result.get("error_code"),
+                    "read_evidence": result.get("read_evidence"),
+                    "retrieval": result.get("retrieval")}
         with db:
             db.execute("UPDATE operations SET state='verified',message=? WHERE id=?", (message_id, operation_id))
         return {"success": True, "state": "verified", "message_id": message_id,

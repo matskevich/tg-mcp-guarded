@@ -282,10 +282,12 @@ async def test_full_read_uses_exact_thread_when_ids_lookup_cannot_find_rich_repl
     reply = types.Message(id=99, peer_id=types.PeerChannel(20), date=datetime.now(timezone.utc),
         message="", rich_message=rich, from_id=types.PeerChannel(11),
         reply_to=types.MessageReplyHeader(reply_to_msg_id=98))
+    async def rpc(request):
+        return SimpleNamespace(messages=[] if type(request).__name__ == "GetRichMessageRequest" else [reply])
     class Client:
         get_messages = AsyncMock(return_value=None)
         get_input_entity = AsyncMock(return_value=types.InputPeerChannel(20,0))
-        __call__ = AsyncMock(return_value=SimpleNamespace(messages=[reply]))
+        __call__ = AsyncMock(side_effect=rpc)
     manager = SimpleNamespace(client=Client(),
         _resolve_read_entity=AsyncMock(return_value=types.PeerChannel(20)))
     result = await full_message(manager, "-1000000000020", 99, thread_root_id=98)
@@ -309,10 +311,12 @@ async def test_linked_reply_read_uses_source_channel_post_and_verifies_discussio
     reply = types.Message(id=99, peer_id=types.PeerChannel(20), date=datetime.now(timezone.utc),
         message="", rich_message=types.RichMessage(blocks=[types.PageBlockParagraph(types.TextPlain('full'))],
         photos=[],documents=[]), reply_to=types.MessageReplyHeader(reply_to_msg_id=98))
+    async def rpc(request):
+        return SimpleNamespace(messages=[] if type(request).__name__ == "GetRichMessageRequest" else [reply])
     class Client:
         get_messages = AsyncMock(return_value=None)
         get_input_entity = AsyncMock(side_effect=lambda entity: types.InputPeerChannel(entity.channel_id,0))
-        __call__ = AsyncMock(return_value=SimpleNamespace(messages=[reply]))
+        __call__ = AsyncMock(side_effect=rpc)
     async def entity(group, allow_users):
         return types.PeerChannel(20 if allow_users else 11)
     manager = SimpleNamespace(client=Client(), _resolve_read_entity=entity)
@@ -324,4 +328,4 @@ async def test_linked_reply_read_uses_source_channel_post_and_verifies_discussio
     root['discussion_root_id'] = 97
     value = await full_message(manager,'-1000000000020',99,98,'-1000000000011',7)
     assert value['error_code'] == 'linked_discussion_identity_mismatch'
-    assert manager.client.__call__.await_count == 1
+    assert manager.client.__call__.await_count == 2
