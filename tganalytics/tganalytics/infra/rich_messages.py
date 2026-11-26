@@ -142,7 +142,8 @@ def prepare_rich(value):
     return result, {**preview, "rich_sha256": digest(raw), "rich_message": raw}
 
 
-async def full_message(manager, group, message_id, thread_root_id=0):
+async def full_message(manager, group, message_id, thread_root_id=0,
+                       discussion_channel="", channel_post_id=0):
     from telethon import utils
     from ..domain.groups import _safe_api_call
 
@@ -156,6 +157,18 @@ async def full_message(manager, group, message_id, thread_root_id=0):
         raise ValueError("nonnegative exact thread_root_id required")
     expected_peer = utils.get_peer_id(entity)
     retrieval = {"method": "messages.getMessages", "thread_root_id": thread_root_id}
+    if bool(discussion_channel) != bool(channel_post_id):
+        return {"success": False, "error_code": "incomplete_discussion_identity"}
+    source_entity = None
+    if discussion_channel:
+        root = await discussion_root(manager, discussion_channel, channel_post_id)
+        if (not root.get("success") or root["discussion_id"] != expected_peer or
+                (thread_root_id and root["discussion_root_id"] != thread_root_id)):
+            return {"success": False, "error_code": "linked_discussion_identity_mismatch"}
+        thread_root_id = root["discussion_root_id"]
+        source_entity = await manager._resolve_read_entity(discussion_channel, allow_users=False)
+        retrieval.update(thread_root_id=thread_root_id, source_channel_id=root["channel_id"],
+                         source_channel_post_id=channel_post_id)
     if message is None or type(message).__name__ == "MessageEmpty":
         if not thread_root_id:
             return {"success": False, "error_code": "message_not_found",
@@ -165,14 +178,18 @@ async def full_message(manager, group, message_id, thread_root_id=0):
         # are checked below; a second ids lookup has the same rich lookup gap.
         from telethon.tl.functions.messages import GetRepliesRequest
         response = await _safe_api_call(manager.client, GetRepliesRequest(
-            peer=await manager.client.get_input_entity(entity), msg_id=thread_root_id,
-            offset_id=message_id + 1, offset_date=None, add_offset=0, limit=5,
-            max_id=message_id + 1, min_id=message_id - 1, hash=0))
+            peer=await manager.client.get_input_entity(source_entity if source_entity is not None else entity),
+            msg_id=channel_post_id if source_entity is not None else thread_root_id,
+            offset_id=0, offset_date=None, add_offset=0, limit=50,
+            max_id=0, min_id=0, hash=0))
         message = next((item for item in response.messages if item.id == message_id
                         and type(item).__name__ != "MessageEmpty"), None)
         if message is None:
             return {"success": False, "error_code": "message_not_found_in_verified_thread",
-                    "thread_root_id": thread_root_id}
+                    "thread_root_id": thread_root_id, "read_evidence": {
+                        "response_type": type(response).__name__,
+                        "returned_ids": [getattr(item, "id", None) for item in response.messages],
+                        "count": getattr(response, "count", None)}}
         retrieval["method"] = "messages.getReplies"
     if thread_root_id:
         reply = getattr(message, "reply_to", None)

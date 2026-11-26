@@ -376,7 +376,8 @@ async def tg_auth_status() -> dict:
 
 @mcp.tool()
 async def tg_get_full_message(group: str, message_id: int, text_offset: int = 0,
-                              text_limit: int = 16000, thread_root_id: int = 0) -> dict:
+                              text_limit: int = 16000, thread_root_id: int = 0,
+                              discussion_channel: str = "", channel_post_id: int = 0) -> dict:
     """Read exact full text/rich tree, media, entities and reply identity.
 
     Follow next_text_offset until null. Offsets count Unicode code points.
@@ -386,7 +387,8 @@ async def tg_get_full_message(group: str, message_id: int, text_offset: int = 0,
     from tganalytics.infra.rich_messages import full_message
     if type(text_offset) is not int or text_offset < 0 or not 1 <= text_limit <= 64000:
         return {"success": False, "error_code": "invalid_text_window"}
-    result = await full_message(await ctx.get_manager(), group, message_id, thread_root_id=thread_root_id)
+    result = await full_message(await ctx.get_manager(), group, message_id, thread_root_id=thread_root_id,
+                                discussion_channel=discussion_channel, channel_post_id=channel_post_id)
     text = result.get("text")
     if isinstance(text, str):
         end = min(len(text), text_offset + text_limit)

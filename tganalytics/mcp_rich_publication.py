@@ -208,7 +208,9 @@ async def reconcile_rich(api, group, operation_id, message_id):
         me = await _safe_api_call(manager.client.get_me)
         if me.id != payload["actor"]:
             return api["_blocked"]("operation actor account mismatch")
-        result = await full_message(manager, group, message_id, thread_root_id=payload["reply_to_msg_id"])
+        result = await full_message(manager, group, message_id, thread_root_id=payload["reply_to_msg_id"],
+                                    discussion_channel=payload["discussion_channel"],
+                                    channel_post_id=payload["channel_post_id"])
         raw = result.get("raw_message", {})
         rich = raw.get("rich_message") or {}
         sender = raw.get("from_id") or raw.get("peer_id")

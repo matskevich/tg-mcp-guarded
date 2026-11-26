@@ -292,9 +292,36 @@ async def test_full_read_uses_exact_thread_when_ids_lookup_cannot_find_rich_repl
     assert result["content_complete"] is True and result["text"] == "complete reply"
     assert result["retrieval"]["method"] == "messages.getReplies"
     request = manager.client.__call__.call_args.args[0]
-    assert request.msg_id == 98 and request.min_id == 98 and request.max_id == 100
+    assert request.msg_id == 98 and request.limit == 50 and request.min_id == request.max_id == 0
     reply.reply_to.reply_to_msg_id = 97
     assert (await full_message(manager,"-1000000000020",99,thread_root_id=98))["error_code"] == "message_thread_mismatch"
     reply.reply_to.reply_to_msg_id = 98
     reply.peer_id = types.PeerChannel(21)
     assert (await full_message(manager,"-1000000000020",99,thread_root_id=98))["error_code"] == "message_peer_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_linked_reply_read_uses_source_channel_post_and_verifies_discussion_binding(monkeypatch):
+    import tganalytics.infra.rich_messages as module
+    root = {"success":True, "channel_id":-1000000000011,"channel_post_id":7,
+            "discussion_id":-1000000000020,"discussion_root_id":98}
+    monkeypatch.setattr(module, 'discussion_root', AsyncMock(return_value=root))
+    reply = types.Message(id=99, peer_id=types.PeerChannel(20), date=datetime.now(timezone.utc),
+        message="", rich_message=types.RichMessage(blocks=[types.PageBlockParagraph(types.TextPlain('full'))],
+        photos=[],documents=[]), reply_to=types.MessageReplyHeader(reply_to_msg_id=98))
+    class Client:
+        get_messages = AsyncMock(return_value=None)
+        get_input_entity = AsyncMock(side_effect=lambda entity: types.InputPeerChannel(entity.channel_id,0))
+        __call__ = AsyncMock(return_value=SimpleNamespace(messages=[reply]))
+    async def entity(group, allow_users):
+        return types.PeerChannel(20 if allow_users else 11)
+    manager = SimpleNamespace(client=Client(), _resolve_read_entity=entity)
+    value = await full_message(manager, '-1000000000020',99,98,'-1000000000011',7)
+    assert value['success'] is True
+    request = manager.client.__call__.call_args.args[0]
+    assert request.peer.channel_id == 11 and request.msg_id == 7
+    assert value['retrieval']['source_channel_post_id'] == 7
+    root['discussion_root_id'] = 97
+    value = await full_message(manager,'-1000000000020',99,98,'-1000000000011',7)
+    assert value['error_code'] == 'linked_discussion_identity_mismatch'
+    assert manager.client.__call__.await_count == 1
