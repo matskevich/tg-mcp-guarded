@@ -1,4 +1,4 @@
-telethon==1.40.0
+telethon==1.46.0
 qrcode==8.2
 python-dotenv==1.1.0
 mcp>=1.0.0,<2

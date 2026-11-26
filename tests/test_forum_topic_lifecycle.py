@@ -79,7 +79,7 @@ async def test_partial_effect_fences_retry(topic):
 
 
 def test_mutations_have_process_guard():
-    from telethon.tl.functions.channels import EditForumTopicRequest, UpdatePinnedForumTopicRequest
+    from tganalytics.infra.forum_schema import EditForumTopicRequest, UpdatePinnedForumTopicRequest
     for request in [EditForumTopicRequest(channel=None, topic_id=1, hidden=True),
                     UpdatePinnedForumTopicRequest(channel=None, topic_id=7, pinned=True)]:
         assert tele_client._is_telethon_write_request(request)

@@ -46,5 +46,5 @@ async def test_forum_rejects_other_target_or_nonforum(forum):
     safe.assert_not_awaited()
 
 def test_forum_rpc_is_write_guarded():
-    from telethon.tl.functions.channels import CreateForumTopicRequest
+    from tganalytics.infra.forum_schema import CreateForumTopicRequest
     assert tele_client._is_telethon_write_request(CreateForumTopicRequest(channel=None,title='x'))

@@ -377,6 +377,12 @@ def _is_telethon_write_request(request: object) -> bool:
     if "telethon.tl.functions" not in module:
         return False
 
+    # MTProto transport wrappers do not turn their nested write into a read.
+    # Inspect before prefix classification and before any schema negotiation.
+    nested = getattr(request, "query", None)
+    if nested is not None:
+        return _contains_telethon_write_request(nested)
+
     name = getattr(request_cls, "__name__", "")
     if AUTH_BOOTSTRAP_ENABLED and name in AUTH_BOOTSTRAP_ALLOWED_REQUESTS:
         return False
@@ -412,6 +418,24 @@ class GuardedTelegramClient(TelegramClient):
     async def __call__(self, request, *args, **kwargs):
         if _contains_telethon_write_request(request) and not _is_direct_write_allowed():
             _raise_write_guard_error(request.__class__.__name__)
+        # Reused auth keys can otherwise retain an older connection's schema.
+        # Opt in per reviewed actor; never alter a request before the write guard.
+        if os.getenv("TG_EXPLICIT_CURRENT_LAYER", "0") == "1":
+            import copy
+            from telethon import utils
+            from telethon.tl.alltlobjects import LAYER
+            from telethon.tl.functions import InvokeWithLayerRequest, InvokeWithoutUpdatesRequest
+
+            async def current_layer(item):
+                # Wrapping before resolve would leave ids/int peer references
+                # unconverted inside the wrapper and fail TL serialization.
+                await item.resolve(self, utils)
+                init = copy.copy(self._init_request)
+                init.query = InvokeWithoutUpdatesRequest(item)
+                return InvokeWithLayerRequest(LAYER, init)
+
+            request = ([await current_layer(item) for item in request]
+                       if isinstance(request, (list, tuple)) else await current_layer(request))
         return await super().__call__(request, *args, **kwargs)
 
     async def send_message(self, *args, **kwargs):
