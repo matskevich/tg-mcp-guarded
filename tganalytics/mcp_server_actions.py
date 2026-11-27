@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import os
 import secrets
@@ -26,7 +27,7 @@ os.environ.setdefault("TG_DIRECT_TELETHON_WRITE_ALLOWED_CONTEXTS", "actions_mcp"
 os.environ.setdefault("TG_WRITE_CONTEXT", "actions_mcp")
 os.environ.setdefault("TG_ACTION_PROCESS", "1")
 
-from mcp.server.fastmcp import FastMCP  # noqa: E402
+from mcp_strict import StrictFastMCP as FastMCP  # noqa: E402
 from mcp_actions_batch import (  # noqa: E402
     create_add_member_batch_record,
     create_delete_messages_batch_record,
@@ -1934,6 +1935,13 @@ async def tg_run_bot_steps(
     }
 
 
+async def _verified_reply_preview(group, reply_to_msg_id):
+    if reply_to_msg_id is None:
+        return None
+    manager = await ctx.get_manager()
+    return await manager.verify_reply_target(group, reply_to_msg_id)
+
+
 @mcp.tool()
 async def tg_send_message(
     group: str,
@@ -1943,6 +1951,10 @@ async def tg_send_message(
     confirmation_text: str = "",
     approval_code: str = "",
     force_resend: bool = False,
+    reply_to_msg_id: int | None = None,
+    send_as_id: int | None = None,
+    expected_actor_id: int | None = None,
+    expected_sender_id: int | None = None,
 ) -> dict:
     """Send message with policy gates (confirm + confirmation_text + idempotency)."""
     can_run, error = _check_action_preconditions(
@@ -1954,8 +1966,19 @@ async def tg_send_message(
     if not can_run:
         return _blocked(error or "preconditions failed")
 
-    clean_text = (message_text or "").strip()
-    if not clean_text:
+    if not dry_run and os.getenv("TG_RICH_PREVIEW_ONLY", "0") == "1":
+        return {"success":False,"submitted":False,"error_code":"ordinary_actor_preview_only"}
+
+    if reply_to_msg_id is not None and (type(reply_to_msg_id) is not int or not 0 < reply_to_msg_id < 2**31):
+        return _blocked("reply_to_msg_id must be a positive message id")
+
+    try:
+        reply_target = await _verified_reply_preview(group, reply_to_msg_id)
+    except ValueError as error:
+        return _blocked(str(error))
+
+    clean_text = message_text or ""
+    if not clean_text.strip():
         return _blocked("message_text is empty")
 
     if len(clean_text) > MAX_MESSAGE_LEN:
@@ -1964,13 +1987,25 @@ async def tg_send_message(
             "error": f"message_text is too long ({len(clean_text)} > {MAX_MESSAGE_LEN})",
         }
 
-    action_hash = _hash_payload(
-        {
+    identity = None
+    if any(value is not None for value in (send_as_id,expected_actor_id,expected_sender_id)):
+        try:
+            manager = await ctx.get_manager()
+            identity, _ = await manager.prepare_send_identity(group,send_as_id,expected_actor_id,expected_sender_id)
+        except ValueError as error:
+            return _blocked(str(error))
+
+    payload = {
             "action": "send_message",
             "target": _normalize_target(group),
             "text": clean_text,
         }
-    )
+    if reply_to_msg_id is not None:
+        payload["reply_to_msg_id"] = reply_to_msg_id
+        payload["reply_target"] = reply_target
+    if identity is not None:
+        payload["identity"] = identity
+    action_hash = _hash_payload(payload)
 
     approval_ok, approval_error, approval_meta = _approval_gate(
         action_hash=action_hash,
@@ -1987,6 +2022,14 @@ async def tg_send_message(
             "target": group,
             "message_len": len(clean_text),
             "action_hash": action_hash,
+            "reply_to_msg_id": reply_to_msg_id,
+            "reply_target": reply_target,
+            "identity": identity,
+            "actor_id": identity["actor_id"] if identity else None,
+            "send_as_id": identity["sender_id"] if identity else None,
+            "message_text": clean_text,
+            "text_sha256":hashlib.sha256(clean_text.encode()).hexdigest(),
+            "wire_format":"ordinary_plain_text",
             "confirmation_text_required": (
                 CONFIRMATION_PHRASE if REQUIRE_CONFIRMATION_TEXT else None
             ),
@@ -1995,7 +2038,8 @@ async def tg_send_message(
             result.update(approval_meta)
         return result
 
-    if not force_resend:
+    from mcp_plain_guard import proven_rejected
+    if not force_resend and not proven_rejected(IDEMPOTENCY_FILE, action_hash):
         duplicate, retry_after_sec = _check_recent_duplicate(action_hash)
         if duplicate:
             return {
@@ -2007,16 +2051,53 @@ async def tg_send_message(
                 "Set force_resend=true to override.",
             }
 
+    from mcp_plain_guard import reserve, finish
+    reservation = reserve(IDEMPOTENCY_FILE, action_hash, payload, force_resend,
+                          IDEMPOTENCY_WINDOW_SEC if IDEMPOTENCY_ENABLED else 0)
+    if not reservation["allowed"]:
+        return {"success":False, "action_hash":action_hash, **reservation,
+                "reconciliation_required":True}
+    nonce = reservation["nonce"]
     manager = await ctx.get_manager()
     try:
-        sent = await manager.send_message(group, clean_text)
+        options = {} if reply_to_msg_id is None else {"reply_to_msg_id": reply_to_msg_id}
+        if identity is not None:
+            options.update(send_as_id=send_as_id, expected_actor_id=expected_actor_id,
+                           expected_sender_id=expected_sender_id)
+        sent = await manager.send_message(group, clean_text, return_receipt=True, **options)
     except LocalQuotaExceeded as exc:
+        finish(IDEMPOTENCY_FILE,action_hash,nonce,"rejected",{"submitted":False,"error_type":"LocalQuotaExceeded"})
         return {"success": False, "target": group, "action_hash": action_hash,
                 "error_code": "local_quota_exceeded", "error": str(exc),
                 "sent": False}
-    if sent:
+    if (isinstance(sent, dict) and sent.get("state") == "rejected" and
+            sent.get("definitive_rpc_rejection") is True and
+            sent.get("error_type") == "SendAsPeerInvalidError"):
+        finish(IDEMPOTENCY_FILE, action_hash, nonce, "rejected", sent)
+        return {"success":False,"action_hash":action_hash,**sent,
+                "automatic_retry_allowed":False,"fresh_preview_required":True}
+    if isinstance(sent, dict) and sent.get("submitted") is False:
+        finish(IDEMPOTENCY_FILE,action_hash,nonce,"rejected",sent)
+        return {"success":False,"action_hash":action_hash,**sent,"error_code":"send_precondition_changed"}
+    if not isinstance(sent, dict) or not sent.get("message_id"):
+        receipt=sent if isinstance(sent,dict) else {"submitted":True,"state":"unknown"}
+        finish(IDEMPOTENCY_FILE,action_hash,nonce,"unknown",receipt)
         _mark_action_executed(action_hash)
+        return {"success":False,**receipt,"state":"unknown","action_hash":action_hash,
+                "error_code":"native_send_receipt_missing","automatic_retry_allowed":False}
+    if reply_to_msg_id is not None and sent.get("reply_to_msg_id") != reply_to_msg_id:
+        finish(IDEMPOTENCY_FILE,action_hash,nonce,"unknown",sent)
+        _mark_action_executed(action_hash)
+        return {"success":False,**sent,"state":"unknown","action_hash":action_hash,
+                "error_code":"reply_binding_not_observed","automatic_retry_allowed":False}
+    finish(IDEMPOTENCY_FILE,action_hash,nonce,"sent",sent)
+    _mark_action_executed(action_hash)
+    if sent:
         return {
+            **sent,
+            "reply_target":reply_target,
+            "identity":identity,
+            "wire_format":"ordinary_plain_text",
             "success": True,
             "target": group,
             "message_len": len(clean_text),
@@ -4153,6 +4234,7 @@ async def tg_run_add_member_batch(batch_id: str, max_actions: int = 100) -> dict
 @mcp.tool()
 async def tg_get_actions_policy() -> dict[str, Any]:
     """Return active action policy gates and limits."""
+    from mcp_rich_publication import unaccepted_reply_targets
     limiter_stats = get_rate_limiter().get_stats()
     session_path_status = ctx.session_path_status()
     now = int(time.time())
@@ -4170,6 +4252,10 @@ async def tg_get_actions_policy() -> dict[str, Any]:
 
     lane_status_counts = update_json_dict(LANE_FILE, _lane_counts, root_key="lanes")
     return {
+        "rich_reply_consumer_guard": {
+            "unaccepted_targets": unaccepted_reply_targets(),
+            "compatible_native_tool":"tg_send_message", "wire_format":"ordinary_plain_text",
+            "automatic_fallback":False},
         "server_profile": "actions",
         "actions_enabled": ACTIONS_ENABLED,
         "require_allowlist": REQUIRE_ALLOWLIST,
@@ -4298,10 +4384,79 @@ async def tg_reconcile_rich_message(group: str, operation_id: str, message_id: i
     return await reconcile_rich(globals(), group, operation_id, message_id)
 
 
+@mcp.tool()
+async def tg_edit_rich_message(
+    group: str, message_id: int, rich_message: dict, operation_id: str,
+    expected_actor_id: int, expected_sender_id: int, expected_rich_sha256: str,
+    dry_run: bool = True, confirm: bool = False,
+    confirmation_text: str = "", approval_code: str = "",
+) -> dict:
+    """Edit a complete native rich body in place under existing ActionMCP guards.
+
+    Exact before hash is checked twice (optimistic CAS, not atomic server CAS).
+    Preview binds the whole body, actor, sender, message and original metadata.
+    Unknown dispatch stays fenced across restarts; reconcile the SAME operation.
+    Never splits, deletes/reposts, changes replies or falls back to plain edit.
+    """
+    from mcp_rich_edit import edit_rich
+    try:
+        return await edit_rich(globals(), group=group, message_id=message_id,
+            rich_message=rich_message, operation_id=operation_id,
+            expected_actor_id=expected_actor_id, expected_sender_id=expected_sender_id,
+            expected_rich_sha256=expected_rich_sha256, dry_run=dry_run, confirm=confirm,
+            confirmation_text=confirmation_text, approval_code=approval_code)
+    except Exception as error:
+        return {"success": False, "error_code": "rich_edit_failed",
+                "error_type": type(error).__name__, "reconciliation_required": not dry_run}
+
+
+@mcp.tool()
+async def tg_reconcile_rich_edit(group: str, operation_id: str, message_id: int) -> dict:
+    """Independent exact edited body/metadata readback; never retries an edit."""
+    from mcp_rich_edit import reconcile_rich_edit
+    return await reconcile_rich_edit(globals(), group, operation_id, message_id)
+
+
 from mcp_private_channel import register_actions as register_private_channel
 register_private_channel(globals())
 from mcp_channel_publishing import register_actions
 register_actions(globals())
+
+
+
+@mcp.tool()
+async def tg_get_plain_operation(group: str, action_hash: str) -> dict:
+    """Inspect the exact durable ordinary operation; read only, never releases retry fences."""
+    from mcp_plain_guard import inspect_or_reconcile
+    return await inspect_or_reconcile(globals(), group, action_hash)
+
+
+@mcp.tool()
+async def tg_reconcile_plain_message(group: str, action_hash: str, operation_id: str, message_id: int) -> dict:
+    """Read exact existing ordinary effect against frozen reservation/actor/sender/reply/text.
+
+    Never sends, edits, deletes, changes the ledger or releases unknown retry fencing.
+    Missing/unsupported/mismatched content stays unknown, never proof of absence.
+    """
+    from mcp_plain_guard import inspect_or_reconcile
+    return await inspect_or_reconcile(globals(), group, action_hash, operation_id, message_id)
+
+
+@mcp.tool()
+async def tg_reconcile_plain_rejection(
+    group: str, action_hash: str, operation_id: str, dry_run: bool = True,
+    confirm: bool = False, confirmation_text: str = "", approval_code: str = "",
+) -> dict:
+    """Reconcile one saved definitive single-RPC SendAsPeerInvalidError.
+
+    Binds existing operation nonce, frozen payload/account/target and saved
+    provider receipt. Ledger-only mutation behind normal native approval and
+    process guards. Timeouts, missing messages and text matches never release
+    unknown fences. Never sends; a new exact preview is required afterwards.
+    """
+    from mcp_plain_guard import reconcile_rejection
+    return await reconcile_rejection(globals(), group, action_hash, operation_id,
+        dry_run, confirm, confirmation_text, approval_code)
 
 
 if __name__ == "__main__":

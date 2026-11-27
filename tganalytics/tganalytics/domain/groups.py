@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
 from telethon import TelegramClient
-from telethon.errors import ChatAdminRequiredError, FloodWaitError
+from telethon.errors import ChatAdminRequiredError, FloodWaitError, SendAsPeerInvalidError
 from telethon.errors.rpcerrorlist import (
     UserAlreadyParticipantError,
     UserNotParticipantError,
@@ -1782,9 +1782,61 @@ class GroupManager:
                 return True
         return False
 
+    async def prepare_send_identity(self, group_identifier, send_as_id=None,
+                                    expected_actor_id=None, expected_sender_id=None):
+        from telethon import utils
+        values = (send_as_id, expected_actor_id, expected_sender_id)
+        if all(value is None for value in values):
+            return None, None
+        if (any(type(value) is not int or value == 0 for value in values)
+                or expected_actor_id <= 0 or send_as_id != expected_sender_id):
+            raise ValueError("complete exact actor/sender identity required")
+        me = await _safe_api_call(self.client.get_me, operation_type="api", max_retries=0)
+        if me.id != expected_actor_id:
+            raise ValueError("actor account mismatch")
+        entity = await self._resolve_target_entity(group_identifier)
+        sender = await _safe_api_call(self.client.get_input_entity, send_as_id,
+                                      operation_type="api", max_retries=0)
+        sender_id = me.id if type(sender).__name__ == "InputPeerSelf" else utils.get_peer_id(sender)
+        if sender_id != expected_sender_id:
+            raise ValueError("send-as identity mismatch")
+        return {"actor_id":me.id,"sender_id":sender_id,"send_as_id":send_as_id,
+                "peer_id":utils.get_peer_id(entity)}, sender
+
+    async def verify_reply_target(self, group_identifier, reply_to_msg_id):
+        from telethon import utils
+        if type(reply_to_msg_id) is not int or not 0 < reply_to_msg_id < 2**31:
+            raise ValueError("reply_to_msg_id must be a positive message id")
+        entity = await self._resolve_target_entity(group_identifier)
+        parent = await _safe_api_call(self.client.get_messages, entity, ids=reply_to_msg_id,
+                                      operation_type="api", max_retries=0)
+        if (parent is None or getattr(parent, "id", None) != reply_to_msg_id or
+                getattr(parent, "peer_id", None) is None or
+                utils.get_peer_id(parent.peer_id) != utils.get_peer_id(entity)):
+            raise ValueError("reply target not verified in exact peer")
+        return {"peer_id":utils.get_peer_id(entity), "message_id":reply_to_msg_id}
+
+    @staticmethod
+    def sent_receipt(sent, requested_reply):
+        from telethon import utils
+        items = sent if isinstance(sent, list) else [sent]
+        ids = [item.id for item in items if type(getattr(item,"id",None)) is int and item.id > 0]
+        item = items[0] if len(items) == 1 else None
+        peer = getattr(item,"peer_id",None)
+        reply = getattr(getattr(item,"reply_to",None),"reply_to_msg_id",None)
+        return {"submitted":True, "state":"sent", "message_id":ids[0] if len(ids)==1 else None,
+                "message_ids":ids, "peer_id":utils.get_peer_id(peer) if peer else None,
+                "sender_id":getattr(item,"sender_id",None), "reply_to_msg_id":reply,
+                "requested_reply_to_msg_id":requested_reply,
+                "reply_binding_from_send_receipt":reply == requested_reply if requested_reply is not None else None,
+                "receipt_source":"provider_client_return", "effect_verified":False}
+
     async def send_message(
-        self, group_identifier: Union[str, int], message_text: str
-    ) -> bool:
+        self, group_identifier: Union[str, int], message_text: str,
+        reply_to_msg_id: Optional[int] = None, return_receipt: bool = False,
+        send_as_id: Optional[int] = None, expected_actor_id: Optional[int] = None,
+        expected_sender_id: Optional[int] = None
+    ) -> Union[bool, Dict[str, Any]]:
         """
         Отправляет сообщение в группу с антиспам защитой
 
@@ -1795,25 +1847,50 @@ class GroupManager:
         Returns:
             True если сообщение отправлено успешно, False в случае ошибки
         """
+        submitted = False
         try:
             entity = await self._resolve_target_entity(group_identifier)
+            send_options = {"parse_mode":None}
+            identity, sender = await self.prepare_send_identity(group_identifier, send_as_id,
+                                                                expected_actor_id, expected_sender_id)
+            # Private users have no alternate send-as. Keep the frozen logical
+            # identity while omitting the redundant RPC flag (including self).
+            private_personal = (identity is not None and identity["peer_id"] > 0
+                                and identity["sender_id"] == identity["actor_id"])
+            if sender is not None and not private_personal:
+                send_options["send_as"] = sender
+            if reply_to_msg_id is not None:
+                await self.verify_reply_target(group_identifier, reply_to_msg_id)
+                send_options["reply_to"] = reply_to_msg_id
 
             is_reply = await self._is_recent_conversation(entity)
             # Preserve all transport controls; only the local budget differs.
-            await _safe_api_call(
+            submitted = True
+            sent = await _safe_api_call(
                 self.client.send_message,
                 entity,
                 message_text,
                 operation_type="conversation_reply" if is_reply else "group_msg",
                 operation_target_id=entity.id if is_reply else None,
+                max_retries=0,
+                **send_options,
             )
 
             logger.info(f"Сообщение успешно отправлено в группу {group_identifier}")
-            return True
+            return self.sent_receipt(sent, reply_to_msg_id) if return_receipt else True
 
         except LocalQuotaExceeded:
             raise
+        except SendAsPeerInvalidError:
+            if return_receipt:
+                return {"submitted": submitted, "state": "rejected", "error_type": "SendAsPeerInvalidError",
+                        "message_id": None, "effect_verified": False, "effect_status": "not_performed",
+                        "definitive_rpc_rejection": True, "receipt_source": "provider_single_rpc_error"}
+            return False
         except Exception as e:
+            if return_receipt:
+                return {"submitted":submitted,"state":"unknown" if submitted else "rejected",
+                        "error_type":type(e).__name__,"message_id":None,"effect_verified":False}
             logger.error(
                 f"Ошибка при отправке сообщения в группу {group_identifier}: {e}"
             )

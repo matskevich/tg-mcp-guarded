@@ -81,3 +81,38 @@ trusted private native receipt, exact operation id and existing ledger. it check
 error type, action hash, unsent state and absence of a known message, and retains
 the receipt hash in `rejection_receipts`. it makes no telegram call and cannot
 release a timeout, changed payload or sent operation. receipt paths remain private.
+
+### existing rich replies and server normalization
+
+`tg_get_full_message` accepts optional `thread_root_id` (default0 preserves old
+calls). when ordinary ids lookup misses a reply, the reader uses bounded native
+`messages.getReplies` for that exact peer/root/id window, then checks the actual
+message id, peer and reply/top root. provenance names the retrieval method.
+reconciliation uses the operation's approved reply identity automatically.
+
+server implicit `TextAutoUrl` wrappers and adjacent plain `TextConcat` runs may
+normalize the submitted tree. only those representation differences are folded
+for equality; exact text/order, explicit links, styles, blocks, sender, reply,
+media order and rtl still must match. raw trees and their actual hashes remain
+unchanged; reconciliation reports exact-tree match separately from the narrow
+normalization policy. no send/edit/delete is part of reading or reconciliation.
+
+### read-only missing-message diagnostics
+
+`tg_get_message_admin_events` reads a bounded admin delete/edit window, returns
+message content only for exact requested ids, and reports current moderation/ttl
+settings without changing them. actual admin-log access is required. absence of
+a matching audit entry is not proof of no deletion. native anti-spam being enabled
+is not proof that it removed a particular message.
+
+optional `from_pts` adds one bounded `updates.getChannelDifference` read filtered
+to the exact message range. returned messages and deletion ids are filtered to
+the requested ids. preserve raw update type/pts/count: a deletion signal carries
+no actor or event time, so a later intentional cleanup must not be mistaken for
+the cause of an earlier failed delivery. no polling/subscription loop is installed.
+
+future send acknowledgements persist only matching id/message updates in the
+private durable ledger, excluding unrelated users/chats. provider acceptance is
+still not useful delivery. this cannot retrospectively recover raw updates that
+an older source version discarded. raw send evidence, independent current read
+and actual recipient/UI usefulness remain separate acceptance stages.

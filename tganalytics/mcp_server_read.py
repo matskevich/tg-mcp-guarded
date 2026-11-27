@@ -17,7 +17,7 @@ os.environ.setdefault("TG_WRITE_CONTEXT", "read_mcp")
 os.environ.setdefault("TG_ACTION_PROCESS", "0")
 os.environ.setdefault("TG_SESSION_RUNTIME_MODE", "copy")
 
-from mcp.server.fastmcp import FastMCP  # noqa: E402
+from mcp_strict import StrictFastMCP as FastMCP  # noqa: E402
 from mcp_server_common import MCPServerContext  # noqa: E402
 
 from tganalytics.infra.limiter import get_rate_limiter, safe_call  # noqa: E402
@@ -376,7 +376,8 @@ async def tg_auth_status() -> dict:
 
 @mcp.tool()
 async def tg_get_full_message(group: str, message_id: int, text_offset: int = 0,
-                              text_limit: int = 16000) -> dict:
+                              text_limit: int = 16000, thread_root_id: int = 0,
+                              discussion_channel: str = "", channel_post_id: int = 0) -> dict:
     """Read exact full text/rich tree, media, entities and reply identity.
 
     Follow next_text_offset until null. Offsets count Unicode code points.
@@ -386,7 +387,8 @@ async def tg_get_full_message(group: str, message_id: int, text_offset: int = 0,
     from tganalytics.infra.rich_messages import full_message
     if type(text_offset) is not int or text_offset < 0 or not 1 <= text_limit <= 64000:
         return {"success": False, "error_code": "invalid_text_window"}
-    result = await full_message(await ctx.get_manager(), group, message_id)
+    result = await full_message(await ctx.get_manager(), group, message_id, thread_root_id=thread_root_id,
+                                discussion_channel=discussion_channel, channel_post_id=channel_post_id)
     text = result.get("text")
     if isinstance(text, str):
         end = min(len(text), text_offset + text_limit)
@@ -430,6 +432,19 @@ async def tg_get_forum_topics(group: str, limit: int = 100) -> dict:
                         "pinned": bool(getattr(t, "pinned", False))} for t in topics]}
 from mcp_channel_publishing import register_read
 register_read(mcp, ctx)
+
+
+@mcp.tool()
+async def tg_get_message_admin_events(group: str, message_ids: list[int], limit: int = 100,
+                                       max_event_id: int = 0, from_pts: int = 0) -> dict:
+    """Read bounded admin delete/edit evidence for exact message ids only.
+
+    Requires actual account admin-log rights. Never deletes/edits or marks read.
+    Follow next_max_event_id for more coverage; an empty result does not prove
+    no deletion. Raw event/message evidence is returned only for requested ids.
+    """
+    from tganalytics.infra.rich_messages import message_admin_events
+    return await message_admin_events(await ctx.get_manager(), group, message_ids, limit, max_event_id, from_pts)
 
 
 if __name__ == "__main__":

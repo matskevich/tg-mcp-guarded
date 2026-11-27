@@ -14,9 +14,14 @@ import subprocess
 import sys
 import time
 import tomllib
+
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+# Fixed source-owned helper; tool callers cannot supply an import path.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tganalytics"))
+from mcp_argument_contract import check_arguments, ArgumentContractError
 
 DEFAULT_CONFIG_PATH = Path.home() / ".codex" / "config.toml"
 DEFAULT_SERVER_NAME = "tgmcp_actions"
@@ -229,6 +234,16 @@ class MCPStdioClient:
         return names
 
     def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
+        catalog = self._request("tools/list", {})
+        if catalog.get("nextCursor"):
+            raise BridgeError("native catalog incomplete; refusing unchecked dispatch")
+        selected = next((item for item in catalog.get("tools", []) if item.get("name") == name), None)
+        if selected is None:
+            raise BridgeError("native tool missing")
+        try:
+            check_arguments(selected["inputSchema"], arguments)
+        except ArgumentContractError as error:
+            raise BridgeError(str(error)) from error
         result = self._request("tools/call", {"name": name, "arguments": arguments})
         return extract_content_payload(result)
 

@@ -260,3 +260,150 @@ async def test_unknown_dispatch_stays_reserved_across_new_process_ledger_and_no_
     assert again["reconciliation_required"] is True
     assert again["new_dispatch"] is False
     assert len(calls) == 1
+
+
+def test_server_auto_url_normalization_preserves_text_but_not_changed_style_or_explicit_link():
+    from tganalytics.infra.rich_messages import canonical_rich_tree
+    plain = {"_":"TextPlain", "text":"a https://example.test 😀\n"}
+    normalized = {"_":"TextConcat", "texts":[{"_":"TextPlain","text":"a "},
+        {"_":"TextAutoUrl","text":{"_":"TextPlain","text":"https://example.test"}},
+        {"_":"TextPlain","text":" 😀\n"}]}
+    assert canonical_rich_tree(normalized) == plain
+    assert projection({"blocks":[{"_":"PageBlockParagraph","text":normalized}]})["text"] == plain["text"]
+    assert canonical_rich_tree({"_":"TextBold","text":plain}) != plain
+    assert canonical_rich_tree({"_":"TextUrl","text":plain,"url":"https://other.test"}) != plain
+    assert canonical_rich_tree({"_":"TextAutoUrl","text":plain,"future_field":True}) != plain
+
+
+@pytest.mark.asyncio
+async def test_full_read_uses_exact_thread_when_ids_lookup_cannot_find_rich_reply():
+    rich = types.RichMessage(blocks=[types.PageBlockParagraph(types.TextPlain("complete reply"))],
+                             photos=[], documents=[])
+    reply = types.Message(id=99, peer_id=types.PeerChannel(20), date=datetime.now(timezone.utc),
+        message="", rich_message=rich, from_id=types.PeerChannel(11),
+        reply_to=types.MessageReplyHeader(reply_to_msg_id=98))
+    async def rpc(request):
+        return SimpleNamespace(messages=[] if type(request).__name__ == "GetRichMessageRequest" else [reply])
+    class Client:
+        get_messages = AsyncMock(return_value=None)
+        get_input_entity = AsyncMock(return_value=types.InputPeerChannel(20,0))
+        __call__ = AsyncMock(side_effect=rpc)
+    manager = SimpleNamespace(client=Client(),
+        _resolve_read_entity=AsyncMock(return_value=types.PeerChannel(20)))
+    result = await full_message(manager, "-1000000000020", 99, thread_root_id=98)
+    assert result["content_complete"] is True and result["text"] == "complete reply"
+    assert result["retrieval"]["method"] == "messages.getReplies"
+    request = manager.client.__call__.call_args.args[0]
+    assert request.msg_id == 98 and request.limit == 50 and request.min_id == request.max_id == 0
+    reply.reply_to.reply_to_msg_id = 97
+    assert (await full_message(manager,"-1000000000020",99,thread_root_id=98))["error_code"] == "message_thread_mismatch"
+    reply.reply_to.reply_to_msg_id = 98
+    reply.peer_id = types.PeerChannel(21)
+    assert (await full_message(manager,"-1000000000020",99,thread_root_id=98))["error_code"] == "message_peer_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_linked_reply_read_uses_source_channel_post_and_verifies_discussion_binding(monkeypatch):
+    import tganalytics.infra.rich_messages as module
+    root = {"success":True, "channel_id":-1000000000011,"channel_post_id":7,
+            "discussion_id":-1000000000020,"discussion_root_id":98}
+    monkeypatch.setattr(module, 'discussion_root', AsyncMock(return_value=root))
+    reply = types.Message(id=99, peer_id=types.PeerChannel(20), date=datetime.now(timezone.utc),
+        message="", rich_message=types.RichMessage(blocks=[types.PageBlockParagraph(types.TextPlain('full'))],
+        photos=[],documents=[]), reply_to=types.MessageReplyHeader(reply_to_msg_id=98))
+    async def rpc(request):
+        return SimpleNamespace(messages=[] if type(request).__name__ == "GetRichMessageRequest" else [reply])
+    class Client:
+        get_messages = AsyncMock(return_value=None)
+        get_input_entity = AsyncMock(side_effect=lambda entity: types.InputPeerChannel(entity.channel_id,0))
+        __call__ = AsyncMock(side_effect=rpc)
+    async def entity(group, allow_users):
+        return types.PeerChannel(20 if allow_users else 11)
+    manager = SimpleNamespace(client=Client(), _resolve_read_entity=entity)
+    value = await full_message(manager, '-1000000000020',99,98,'-1000000000011',7)
+    assert value['success'] is True
+    request = manager.client.__call__.call_args.args[0]
+    assert request.peer.channel_id == 11 and request.msg_id == 7
+    assert value['retrieval']['source_channel_post_id'] == 7
+    root['discussion_root_id'] = 97
+    value = await full_message(manager,'-1000000000020',99,98,'-1000000000011',7)
+    assert value['error_code'] == 'linked_discussion_identity_mismatch'
+    assert manager.client.__call__.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_admin_audit_returns_only_requested_message_evidence_and_no_other_user_fields():
+    from tganalytics.infra.rich_messages import message_admin_events
+    def event(event_id, message_id, actor):
+        return types.ChannelAdminLogEvent(event_id,datetime.now(timezone.utc),actor,
+            types.ChannelAdminLogEventActionDeleteMessage(types.Message(id=message_id,
+                peer_id=types.PeerChannel(20),date=datetime.now(timezone.utc),message='synthetic')))
+    class Client:
+        get_input_entity=AsyncMock(return_value=types.InputPeerChannel(20,0))
+        __call__=AsyncMock(return_value=SimpleNamespace(events=[event(100,99,8),event(98,98,9)],
+            users=[types.User(id=8,first_name='moderator',phone='not-exported'),types.User(id=9,first_name='other')]))
+    manager=SimpleNamespace(client=Client(),_resolve_read_entity=AsyncMock(return_value=types.PeerChannel(20)))
+    result=await message_admin_events(manager,'-1000000000020',[99],limit=2)
+    assert [e['action']['message']['id'] for e in result['events']]==[99]
+    assert result['actors']==[{'id':8,'username':None,'first_name':'moderator','bot':False}]
+    assert result['next_max_event_id']==98
+    request=manager.client.__call__.call_args_list[0].args[0]
+    assert request.events_filter.delete and request.events_filter.edit
+    assert result['no_match_is_not_proof_of_no_deletion'] is True
+
+
+def test_native_ack_retains_exact_message_without_other_user_or_chat_payloads():
+    message=types.Message(id=99,peer_id=types.PeerChannel(20),date=datetime.now(timezone.utc),
+        message='synthetic',reply_to=types.MessageReplyHeader(reply_to_msg_id=98))
+    unrelated=types.Message(id=88,peer_id=types.PeerChannel(21),date=datetime.now(timezone.utc),message='do not export')
+    result=SimpleNamespace(updates=[types.UpdateMessageID(id=99,random_id=12),
+        types.UpdateNewChannelMessage(message=message,pts=1,pts_count=1),
+        types.UpdateNewChannelMessage(message=unrelated,pts=2,pts_count=1)],
+        users=[SimpleNamespace(phone='do not retain')])
+    value=publication.acknowledgement(result,-1000000000020,12)
+    assert [v.get('message',{}).get('id') for v in value['updates']]==[None,99]
+    assert 'do not export' not in json.dumps(value)
+    assert 'phone' not in json.dumps(value)
+
+
+@pytest.mark.asyncio
+async def test_exact_channel_difference_filters_content_and_retains_deletion_update():
+    from tganalytics.infra.rich_messages import message_admin_events
+    message=types.Message(id=99,peer_id=types.PeerChannel(20),date=datetime.now(timezone.utc),message='exact')
+    other=types.Message(id=100,peer_id=types.PeerChannel(20),date=datetime.now(timezone.utc),message='unrelated')
+    async def rpc(request):
+        if type(request).__name__=='GetAdminLogRequest':return SimpleNamespace(events=[],users=[])
+        if type(request).__name__=='GetFullChannelRequest':return SimpleNamespace(full_chat=SimpleNamespace(antispam=True))
+        assert type(request).__name__=='GetChannelDifferenceRequest'
+        assert request.pts==34 and request.filter.ranges[0].min_id==request.filter.ranges[0].max_id==99
+        return SimpleNamespace(new_messages=[message,other],other_updates=[types.UpdateDeleteChannelMessages(
+            channel_id=20,messages=[99,100],pts=42,pts_count=1)],pts=42,final=True)
+    manager=SimpleNamespace(client=SimpleNamespace(get_input_entity=AsyncMock(return_value=types.InputPeerChannel(20,0)),
+        __call__=None),_resolve_read_entity=AsyncMock(return_value=types.PeerChannel(20)))
+    class Client:
+        get_input_entity=manager.client.get_input_entity
+        __call__=AsyncMock(side_effect=rpc)
+    manager.client=Client()
+    value=await message_admin_events(manager,'-1000000000020',[99],from_pts=34)
+    update=value['update_evidence']
+    assert [item['id'] for item in update['messages']]==[99]
+    assert update['deletion_updates'][0]['messages']==[99]
+    assert 'unrelated' not in json.dumps(value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('dry_run',[True,False])
+async def test_operator_known_rich_reply_failure_blocks_before_approval_or_rpc(tmp_path,monkeypatch,dry_run):
+    monkeypatch.delenv('TG_RICH_PREVIEW_ONLY',raising=False)
+    monkeypatch.setenv('TG_RICH_REPLY_UNACCEPTED_TARGETS','-1000000000020')
+    calls=[];api=action_api(tmp_path,calls)
+    manager=await api['ctx'].get_manager()
+    manager._resolve_read_entity.return_value=types.PeerChannel(20)
+    def never(**kwargs):raise AssertionError('must not mint approval')
+    api['_approval_gate']=never
+    args=arguments();args.update(group='-1000000000020',reply_to_msg_id=98)
+    out=await publication.send_rich(api,**args,dry_run=dry_run,confirm=not dry_run)
+    assert out['error_code']=='rich_reply_consumer_not_accepted'
+    assert not out['submitted'] and not out['automatic_fallback']
+    assert out['wire_format_required']=='ordinary_plain_text'
+    assert calls==[] and not (tmp_path/'rich_publication.sqlite').exists()

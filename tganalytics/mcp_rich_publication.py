@@ -14,7 +14,7 @@ from telethon import utils
 from tganalytics.domain.groups import _safe_api_call
 from tganalytics.infra.limiter import safe_call
 from tganalytics.infra.rich_messages import (
-    UnsupportedRichContent, digest, discussion_root, full_message, prepare_rich,
+    UnsupportedRichContent, canonical_rich_tree, digest, discussion_root, full_message, prepare_rich, transport,
 )
 
 
@@ -30,7 +30,35 @@ def ledger(api):
     if "before_id" not in {row[1] for row in db.execute("PRAGMA table_info(operations)")}:
         db.execute("ALTER TABLE operations ADD COLUMN before_id INTEGER")
         db.commit()
+    if "receipt" not in {row[1] for row in db.execute("PRAGMA table_info(operations)")}:
+        db.execute("ALTER TABLE operations ADD COLUMN receipt TEXT")
+        db.commit()
     return db
+
+
+def acknowledgement(result, target, random_id):
+    """Retain exact effect evidence, not unrelated returned users/contacts."""
+    updates = []
+    for item in getattr(result, "updates", []):
+        name = type(item).__name__
+        if name == "UpdateMessageID" and item.random_id == random_id:
+            updates.append(transport(item))
+        elif name in {"UpdateNewMessage", "UpdateNewChannelMessage"}:
+            if utils.get_peer_id(item.message.peer_id) == target:
+                updates.append(transport(item))
+    return {"response_type":type(result).__name__, "updates":updates,
+            "update_types":[type(item).__name__ for item in getattr(result,"updates",[])],
+            "short_sent":transport(result) if type(result).__name__ == "UpdateShortSentMessage" else None}
+
+
+def unaccepted_reply_targets():
+    raw = os.environ.get('TG_RICH_REPLY_UNACCEPTED_TARGETS','')
+    if not raw:
+        return []
+    parts = raw.split(',')
+    if any(not re.fullmatch('-[1-9][0-9]{0,18}', part) for part in parts):
+        raise ValueError('invalid_rich_reply_consumer_profile')
+    return sorted(set(map(int,parts)))
 
 
 def normalized(value):
@@ -72,6 +100,11 @@ async def send_rich(api, *, group, rich_message, operation_id, expected_actor_id
     target = utils.get_peer_id(entity)
     if str(target) != group:
         return api["_blocked"]("exact numeric target required")
+    if reply_to_msg_id and target in unaccepted_reply_targets():
+        return {'success':False,'submitted':False,'error_code':'rich_reply_consumer_not_accepted',
+                'consumer_acceptance':'known_rendering_failure','native_rpc_not_invoked':True,
+                'compatible_native_tool':'tg_send_message','compatible_facade_tool':'tg_send_plain_message',
+                'wire_format_required':'ordinary_plain_text','automatic_fallback':False}
     if bool(discussion_channel) != bool(channel_post_id):
         return api["_blocked"]("discussion channel and post must be supplied together")
     root = None
@@ -180,7 +213,8 @@ async def send_rich(api, *, group, rich_message, operation_id, expected_actor_id
         if type(result).__name__ == "UpdateShortSentMessage":
             message_id = result.id
         with db:
-            db.execute("UPDATE operations SET state='sent',message=? WHERE id=?", (message_id, operation_id))
+            db.execute("UPDATE operations SET state='sent',message=?,receipt=? WHERE id=?",
+                       (message_id, json.dumps(acknowledgement(result,target,random_id),ensure_ascii=False), operation_id))
         return {"success": True, "submitted": True, "message_id": message_id,
                 "target": target, "state": "sent", "action_hash": action_hash,
                 "effect_verified": False, "reconciliation_required": True}
@@ -198,6 +232,8 @@ async def reconcile_rich(api, group, operation_id, message_id):
         if not row:
             return {"success": False, "error_code": "unknown_operation"}
         payload = json.loads(row["payload"])
+        if payload.get("action") != "send_rich_message":
+            return api["_blocked"]("operation kind mismatch")
         if str(payload["target"]) != group:
             return api["_blocked"]("operation target mismatch")
         if row["message"] is not None and row["message"] != message_id:
@@ -208,7 +244,9 @@ async def reconcile_rich(api, group, operation_id, message_id):
         me = await _safe_api_call(manager.client.get_me)
         if me.id != payload["actor"]:
             return api["_blocked"]("operation actor account mismatch")
-        result = await full_message(manager, group, message_id)
+        result = await full_message(manager, group, message_id, thread_root_id=payload["reply_to_msg_id"],
+                                    discussion_channel=payload["discussion_channel"],
+                                    channel_post_id=payload["channel_post_id"])
         raw = result.get("raw_message", {})
         rich = raw.get("rich_message") or {}
         sender = raw.get("from_id") or raw.get("peer_id")
@@ -219,18 +257,25 @@ async def reconcile_rich(api, group, operation_id, message_id):
         expected = payload["rich_message"]
         matches = (result.get("content_complete") is True and sender_id == payload["sender"]
                    and reply == payload["reply_to_msg_id"] and
-                   normalized(rich.get("blocks")) == normalized(expected.get("blocks")) and
+                   canonical_rich_tree(normalized(rich.get("blocks"))) == canonical_rich_tree(normalized(expected.get("blocks"))) and
                    bool(rich.get("rtl")) == bool(expected.get("rtl")))
         for name in ("photos", "documents"):
             matches = matches and ([item["id"] for item in rich.get(name, [])] ==
                                    [item["id"] for item in expected.get(name, [])])
         if not matches:
             return {"success": False, "state": "unknown", "readback_mismatch": True,
-                    "automatic_retry_allowed": False}
+                    "automatic_retry_allowed": False,
+                    "read_error_code": result.get("error_code"),
+                    "read_evidence": result.get("read_evidence"),
+                    "retrieval": result.get("retrieval"),
+                    "provider_receipt_available": bool(row["receipt"])}
         with db:
             db.execute("UPDATE operations SET state='verified',message=? WHERE id=?", (message_id, operation_id))
         return {"success": True, "state": "verified", "message_id": message_id,
                 "target": payload["target"], "action_hash": row["hash"],
-                "rich_sha256": result.get("rich_sha256"), "independent_readback": True}
+                "rich_sha256": result.get("rich_sha256"), "independent_readback": True,
+                "exact_rich_tree_match": normalized(rich.get("blocks")) == normalized(expected.get("blocks")),
+                "normalization_policy": "implicit_auto_url_and_adjacent_plain_concat_only",
+                "retrieval": result.get("retrieval")}
     finally:
         db.close()

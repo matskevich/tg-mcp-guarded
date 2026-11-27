@@ -24,8 +24,9 @@ class _FakeManager:
             "group_id": 123456789 if not dry_run else None,
         }
 
-    async def send_message(self, group, message_text):
-        return True
+    async def send_message(self, group, message_text, return_receipt=False, reply_to_msg_id=None):
+        return {"message_id":17,"message_ids":[17],"submitted":True,"state":"sent",
+                "reply_to_msg_id":reply_to_msg_id,"effect_verified":False} if return_receipt else True
 
     async def pin_message(self, group, message_id, notify=False):
         return True
@@ -128,6 +129,7 @@ async def test_send_message_requires_exact_confirmation_text(monkeypatch, tmp_pa
     monkeypatch.setattr(actions, "REQUIRE_APPROVAL_CODE", False)
     monkeypatch.setattr(actions, "IDEMPOTENCY_ENABLED", False)
     monkeypatch.setattr(actions, "APPROVAL_FILE", tmp_path / "approvals.json")
+    monkeypatch.setattr(actions, "IDEMPOTENCY_FILE", tmp_path / "idempotency.json")
 
     result = await actions.tg_send_message(
         group="test_target",
@@ -151,6 +153,7 @@ async def test_create_private_group_requires_allowlisted_title(monkeypatch, tmp_
     monkeypatch.setattr(actions, "CONFIRMATION_PHRASE", "confirm-test-action")
     monkeypatch.setattr(actions, "REQUIRE_APPROVAL_CODE", True)
     monkeypatch.setattr(actions, "APPROVAL_FILE", tmp_path / "approvals.json")
+    monkeypatch.setattr(actions, "IDEMPOTENCY_FILE", tmp_path / "idempotency.json")
 
     result = await actions.tg_create_private_group(
         title="email critical",
@@ -175,6 +178,7 @@ async def test_create_private_group_runs_dry_run_then_confirm(monkeypatch, tmp_p
     monkeypatch.setattr(actions, "APPROVAL_TTL_SEC", 1800)
     monkeypatch.setattr(actions, "APPROVAL_MIN_AGE_SEC", 0)
     monkeypatch.setattr(actions, "APPROVAL_FILE", tmp_path / "approvals.json")
+    monkeypatch.setattr(actions, "IDEMPOTENCY_FILE", tmp_path / "idempotency.json")
     monkeypatch.setattr(actions, "ctx", _FakeCtx())
 
     preview = await actions.tg_create_private_group(
@@ -213,6 +217,7 @@ async def test_send_message_requires_one_time_approval_code(monkeypatch, tmp_pat
     monkeypatch.setattr(actions, "APPROVAL_TTL_SEC", 1800)
     monkeypatch.setattr(actions, "APPROVAL_MIN_AGE_SEC", 0)
     monkeypatch.setattr(actions, "APPROVAL_FILE", tmp_path / "approvals.json")
+    monkeypatch.setattr(actions, "IDEMPOTENCY_FILE", tmp_path / "idempotency.json")
     monkeypatch.setattr(actions, "ctx", _FakeCtx())
 
     preview = await actions.tg_send_message(
@@ -270,6 +275,7 @@ async def test_pin_message_runs_dry_run_then_confirm(monkeypatch, tmp_path):
     monkeypatch.setattr(actions, "APPROVAL_TTL_SEC", 1800)
     monkeypatch.setattr(actions, "APPROVAL_MIN_AGE_SEC", 0)
     monkeypatch.setattr(actions, "APPROVAL_FILE", tmp_path / "approvals.json")
+    monkeypatch.setattr(actions, "IDEMPOTENCY_FILE", tmp_path / "idempotency.json")
     monkeypatch.setattr(actions, "ctx", _FakeCtx())
 
     preview = await actions.tg_pin_message(
@@ -309,6 +315,7 @@ async def test_send_message_blocks_immediate_execute_after_dry_run(
     monkeypatch.setattr(actions, "APPROVAL_TTL_SEC", 1800)
     monkeypatch.setattr(actions, "APPROVAL_MIN_AGE_SEC", 30)
     monkeypatch.setattr(actions, "APPROVAL_FILE", tmp_path / "approvals.json")
+    monkeypatch.setattr(actions, "IDEMPOTENCY_FILE", tmp_path / "idempotency.json")
     monkeypatch.setattr(actions, "ctx", _FakeCtx())
 
     ts = {"now": 1000.0}
@@ -361,6 +368,7 @@ async def test_set_channel_comments_join_requirement_requires_allowlisted_linked
     monkeypatch.setattr(actions, "REQUIRE_APPROVAL_CODE", True)
     monkeypatch.setattr(actions, "IDEMPOTENCY_ENABLED", False)
     monkeypatch.setattr(actions, "APPROVAL_FILE", tmp_path / "approvals.json")
+    monkeypatch.setattr(actions, "IDEMPOTENCY_FILE", tmp_path / "idempotency.json")
     monkeypatch.setattr(actions, "ctx", _FakeCtx())
 
     result = await actions.tg_set_channel_comments_join_requirement(
@@ -389,6 +397,7 @@ async def test_set_channel_comments_join_requirement_executes_after_dry_run(
     monkeypatch.setattr(actions, "APPROVAL_TTL_SEC", 1800)
     monkeypatch.setattr(actions, "APPROVAL_MIN_AGE_SEC", 0)
     monkeypatch.setattr(actions, "APPROVAL_FILE", tmp_path / "approvals.json")
+    monkeypatch.setattr(actions, "IDEMPOTENCY_FILE", tmp_path / "idempotency.json")
     monkeypatch.setattr(actions, "ctx", _FakeCtx())
 
     preview = await actions.tg_set_channel_comments_join_requirement(
@@ -427,6 +436,7 @@ async def test_delete_messages_requires_one_time_approval_code(monkeypatch, tmp_
     monkeypatch.setattr(actions, "APPROVAL_TTL_SEC", 1800)
     monkeypatch.setattr(actions, "APPROVAL_MIN_AGE_SEC", 0)
     monkeypatch.setattr(actions, "APPROVAL_FILE", tmp_path / "approvals.json")
+    monkeypatch.setattr(actions, "IDEMPOTENCY_FILE", tmp_path / "idempotency.json")
     monkeypatch.setattr(actions, "ctx", _FakeCtx())
 
     preview = await actions.tg_delete_messages(
@@ -465,6 +475,7 @@ async def test_leave_dialog_requires_one_time_approval_code(monkeypatch, tmp_pat
     monkeypatch.setattr(actions, "APPROVAL_TTL_SEC", 1800)
     monkeypatch.setattr(actions, "APPROVAL_MIN_AGE_SEC", 0)
     monkeypatch.setattr(actions, "APPROVAL_FILE", tmp_path / "approvals.json")
+    monkeypatch.setattr(actions, "IDEMPOTENCY_FILE", tmp_path / "idempotency.json")
     monkeypatch.setattr(actions, "ctx", _FakeCtx())
 
     preview = await actions.tg_leave_dialog(group="test_channel", dry_run=True)
@@ -496,6 +507,7 @@ async def test_forward_messages_requires_allowlisted_source(monkeypatch, tmp_pat
     monkeypatch.setattr(actions, "REQUIRE_APPROVAL_CODE", False)
     monkeypatch.setattr(actions, "IDEMPOTENCY_ENABLED", False)
     monkeypatch.setattr(actions, "APPROVAL_FILE", tmp_path / "approvals.json")
+    monkeypatch.setattr(actions, "IDEMPOTENCY_FILE", tmp_path / "idempotency.json")
     monkeypatch.setattr(actions, "ctx", _FakeCtx())
 
     blocked = await actions.tg_forward_messages(
