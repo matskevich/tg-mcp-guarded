@@ -92,7 +92,10 @@ async def inspect_or_reconcile(api, group, action_hash, operation_id=None, messa
     actual_sender = getattr(message,'from_id',None)
     if actual_sender is None and getattr(message,'post',False):
         actual_sender = getattr(message,'peer_id',None)
-    if actual_sender is None and identity['peer_id'] == me.id and getattr(message,'out',False):
+    if (actual_sender is None and identity['peer_id'] > 0 and
+            identity['sender_id'] == me.id and getattr(message,'out',False)):
+        # An independent server read of an outgoing private message identifies
+        # the pinned actor. Do not infer this from a short send acknowledgement.
         actual_sender = me.id
     peer = getattr(message,'peer_id',None)
     matches = (type(message).__name__ == 'Message' and message.id == message_id and
@@ -110,6 +113,8 @@ async def inspect_or_reconcile(api, group, action_hash, operation_id=None, messa
             'constraint':None if causal_match else 'plain_operation_causality_unproven',
             'message_id':message_id,'read_method':'get_messages_exact_id',
             'message_type':type(message).__name__,
+            'readback_sender_id':utils.get_peer_id(actual_sender) if actual_sender is not None else None,
+            'readback_peer_id':utils.get_peer_id(peer) if peer is not None else None,
             'no_match_is_not_proof_of_no_effect':True,
             'readback_sha256':hashlib.sha256((getattr(message,'message',None) or '').encode()).hexdigest()}
 

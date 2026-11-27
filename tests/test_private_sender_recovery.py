@@ -95,3 +95,23 @@ async def test_channel_display_sender_is_not_omitted(monkeypatch):
         send_as_id=sender,expected_actor_id=10,expected_sender_id=sender)
     assert result['sender_id']==sender
     assert isinstance(client.send_message.call_args.kwargs['send_as'],types.InputPeerChannel)
+
+
+@pytest.mark.asyncio
+async def test_private_null_short_ack_verified_only_by_exact_causal_read(tmp_path):
+    path=tmp_path/'idem.json';payload={'action':'send_message','target':'20','text':'synthetic',
+        'identity':{'actor_id':10,'sender_id':10,'send_as_id':10,'peer_id':20}}
+    h=actions._hash_payload(payload);op=guard.reserve(path,h,payload)
+    guard.finish(path,h,op['nonce'],'sent',{'submitted':True,'message_id':99,'sender_id':None})
+    message=types.Message(id=99,peer_id=types.PeerUser(20),out=True,message='synthetic',date=datetime.now(timezone.utc))
+    client=SimpleNamespace(get_me=AsyncMock(return_value=SimpleNamespace(id=10)),get_messages=AsyncMock(return_value=message))
+    manager=SimpleNamespace(client=client,_resolve_target_entity=AsyncMock(return_value=types.PeerUser(20)))
+    api={'IDEMPOTENCY_FILE':path,'_hash_payload':actions._hash_payload,'_normalize_target':actions._normalize_target,
+         'ctx':SimpleNamespace(get_manager=AsyncMock(return_value=manager))}
+    out=await guard.inspect_or_reconcile(api,'20',h,op['nonce'],99)
+    assert out['success'] and out['operation_receipt_id_match'] and out['readback_sender_id']==10
+    assert out['provider_receipt']['sender_id'] is None and out['ledger_unchanged']
+    message.out=False
+    assert not (await guard.inspect_or_reconcile(api,'20',h,op['nonce'],99))['success']
+    message.out=True
+    assert not (await guard.inspect_or_reconcile(api,'20',h,op['nonce'],100))['success']
