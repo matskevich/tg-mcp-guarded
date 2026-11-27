@@ -112,3 +112,83 @@ async def inspect_or_reconcile(api, group, action_hash, operation_id=None, messa
             'message_type':type(message).__name__,
             'no_match_is_not_proof_of_no_effect':True,
             'readback_sha256':hashlib.sha256((getattr(message,'message',None) or '').encode()).hexdigest()}
+
+
+def proven_rejected(path, action_hash):
+    """Only a provider-owned definitive rejection may bypass the duplicate mark."""
+    try:
+        row = operation(path, action_hash)
+    except ValueError:
+        return False
+    receipt = json.loads(row['receipt']) if row['receipt'] else {}
+    return (row['state'] == 'rejected' and receipt.get('effect_status') == 'not_performed'
+            and receipt.get('definitive_rpc_rejection') is True
+            and receipt.get('error_type') == 'SendAsPeerInvalidError'
+            and receipt.get('message_id') is None)
+
+
+async def reconcile_rejection(api, group, action_hash, operation_id, dry_run=True,
+                              confirm=False, confirmation_text='', approval_code=''):
+    """Reclassify one saved single-RPC rejection; absence/text never releases a fence."""
+    import hashlib
+    allowed, error = api['_check_action_preconditions'](group, dry_run=dry_run,
+                        confirm=confirm, confirmation_text=confirmation_text)
+    if not allowed:
+        return api['_blocked'](error or 'preconditions failed')
+    view = await inspect_or_reconcile(api, group, action_hash, operation_id)
+    row = operation(api['IDEMPOTENCY_FILE'], action_hash, operation_id)
+    receipt = json.loads(row['receipt']) if row['receipt'] else {}
+    identity = view['identity']
+    # The error came from this operation's persisted provider single-RPC call,
+    # not a caller supplied error or an empty destination scan. No generic RPC
+    # error/timeout is treated as proof of rejection.
+    frozen = json.loads(row['payload'])
+    private_personal = (0 < identity['peer_id'] != identity['actor_id']
+        and identity['sender_id'] == identity['send_as_id'] == identity['actor_id']
+        and len(frozen['text']) <= 2000)
+    definitive = (private_personal and receipt.get('submitted') is True and
+        receipt.get('error_type') == 'SendAsPeerInvalidError' and
+        receipt.get('message_id') is None and not receipt.get('message_ids') and
+        receipt.get('state') in ('unknown', 'rejected'))
+    if row['state'] == 'rejected' and proven_rejected(api['IDEMPOTENCY_FILE'], action_hash):
+        return {**view, 'state':'rejected', 'effect_status':'not_performed',
+                'definitive_rpc_rejection':True, 'reconciled':True, 'ledger_unchanged':True,
+                'fresh_preview_required':True}
+    if row['state'] != 'unknown' or not definitive:
+        return {**view, 'success':False, 'error_code':'definitive_rpc_rejection_unproven',
+                'effect_status':'unknown', 'reconciled':False}
+    before_sha = hashlib.sha256(row['receipt'].encode()).hexdigest()
+    reconciliation = {'action':'reconcile_plain_rpc_rejection','action_hash':action_hash,
+        'operation_id':operation_id,'identity':identity,'text_sha256':view['text_sha256'],
+        'provider_receipt_sha256':before_sha,'error_type':'SendAsPeerInvalidError'}
+    reconciliation_hash = api['_hash_payload'](reconciliation)
+    ok, error, meta = api['_approval_gate'](action_hash=reconciliation_hash,
+                                           dry_run=dry_run,approval_code=approval_code)
+    if not ok:
+        return api['_blocked'](error or 'approval blocked')
+    result = {**view,'reconciliation_hash':reconciliation_hash,
+              'provider_receipt_sha256':before_sha,'definitive_rpc_rejection':True,
+              'effect_status':'not_performed','fresh_preview_required':True}
+    if dry_run:
+        return {**result,'dry_run':True,'ledger_unchanged':True,
+                'confirmation_text_required':api['CONFIRMATION_PHRASE'],**(meta or {})}
+    proof = {**receipt,'state':'rejected','effect_status':'not_performed',
+        'definitive_rpc_rejection':True,'receipt_source':'saved_provider_single_rpc_error',
+        'reconciliation':reconciliation,'reconciliation_hash':reconciliation_hash}
+    db = database(api['IDEMPOTENCY_FILE'])
+    try:
+        with db:
+            db.execute('BEGIN IMMEDIATE')
+            db.execute('CREATE TABLE IF NOT EXISTS ordinary_rejection_reconciliations '
+                       '(hash TEXT, nonce TEXT, proof TEXT, PRIMARY KEY(hash,nonce))')
+            changed = db.execute("UPDATE ordinary_dispatches SET state='rejected',receipt=? "
+                "WHERE hash=? AND nonce=? AND state='unknown' AND receipt=? AND payload=?",
+                (json.dumps(proof,ensure_ascii=False),action_hash,operation_id,row['receipt'],row['payload'])).rowcount
+            if changed != 1:
+                raise ValueError('plain_operation_changed_during_reconciliation')
+            db.execute('INSERT INTO ordinary_rejection_reconciliations VALUES (?,?,?)',
+                (action_hash,operation_id,json.dumps(proof,ensure_ascii=False)))
+        return {**result,'state':'rejected','ledger_state':'rejected','reconciled':True,
+                'ledger_unchanged':False,'submitted':False,'telegram_rpc_invoked':False}
+    finally:
+        db.close()

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
 from telethon import TelegramClient
-from telethon.errors import ChatAdminRequiredError, FloodWaitError
+from telethon.errors import ChatAdminRequiredError, FloodWaitError, SendAsPeerInvalidError
 from telethon.errors.rpcerrorlist import (
     UserAlreadyParticipantError,
     UserNotParticipantError,
@@ -1853,7 +1853,11 @@ class GroupManager:
             send_options = {"parse_mode":None}
             identity, sender = await self.prepare_send_identity(group_identifier, send_as_id,
                                                                 expected_actor_id, expected_sender_id)
-            if sender is not None and identity["peer_id"] != identity["actor_id"]:
+            # Private users have no alternate send-as. Keep the frozen logical
+            # identity while omitting the redundant RPC flag (including self).
+            private_personal = (identity is not None and identity["peer_id"] > 0
+                                and identity["sender_id"] == identity["actor_id"])
+            if sender is not None and not private_personal:
                 send_options["send_as"] = sender
             if reply_to_msg_id is not None:
                 await self.verify_reply_target(group_identifier, reply_to_msg_id)
@@ -1877,6 +1881,12 @@ class GroupManager:
 
         except LocalQuotaExceeded:
             raise
+        except SendAsPeerInvalidError:
+            if return_receipt:
+                return {"submitted": submitted, "state": "rejected", "error_type": "SendAsPeerInvalidError",
+                        "message_id": None, "effect_verified": False, "effect_status": "not_performed",
+                        "definitive_rpc_rejection": True, "receipt_source": "provider_single_rpc_error"}
+            return False
         except Exception as e:
             if return_receipt:
                 return {"submitted":submitted,"state":"unknown" if submitted else "rejected",

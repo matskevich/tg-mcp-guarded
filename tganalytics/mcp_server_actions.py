@@ -2038,7 +2038,8 @@ async def tg_send_message(
             result.update(approval_meta)
         return result
 
-    if not force_resend:
+    from mcp_plain_guard import proven_rejected
+    if not force_resend and not proven_rejected(IDEMPOTENCY_FILE, action_hash):
         duplicate, retry_after_sec = _check_recent_duplicate(action_hash)
         if duplicate:
             return {
@@ -2069,6 +2070,12 @@ async def tg_send_message(
         return {"success": False, "target": group, "action_hash": action_hash,
                 "error_code": "local_quota_exceeded", "error": str(exc),
                 "sent": False}
+    if (isinstance(sent, dict) and sent.get("state") == "rejected" and
+            sent.get("definitive_rpc_rejection") is True and
+            sent.get("error_type") == "SendAsPeerInvalidError"):
+        finish(IDEMPOTENCY_FILE, action_hash, nonce, "rejected", sent)
+        return {"success":False,"action_hash":action_hash,**sent,
+                "automatic_retry_allowed":False,"fresh_preview_required":True}
     if isinstance(sent, dict) and sent.get("submitted") is False:
         finish(IDEMPOTENCY_FILE,action_hash,nonce,"rejected",sent)
         return {"success":False,"action_hash":action_hash,**sent,"error_code":"send_precondition_changed"}
@@ -4433,6 +4440,23 @@ async def tg_reconcile_plain_message(group: str, action_hash: str, operation_id:
     """
     from mcp_plain_guard import inspect_or_reconcile
     return await inspect_or_reconcile(globals(), group, action_hash, operation_id, message_id)
+
+
+@mcp.tool()
+async def tg_reconcile_plain_rejection(
+    group: str, action_hash: str, operation_id: str, dry_run: bool = True,
+    confirm: bool = False, confirmation_text: str = "", approval_code: str = "",
+) -> dict:
+    """Reconcile one saved definitive single-RPC SendAsPeerInvalidError.
+
+    Binds existing operation nonce, frozen payload/account/target and saved
+    provider receipt. Ledger-only mutation behind normal native approval and
+    process guards. Timeouts, missing messages and text matches never release
+    unknown fences. Never sends; a new exact preview is required afterwards.
+    """
+    from mcp_plain_guard import reconcile_rejection
+    return await reconcile_rejection(globals(), group, action_hash, operation_id,
+        dry_run, confirm, confirmation_text, approval_code)
 
 
 if __name__ == "__main__":
